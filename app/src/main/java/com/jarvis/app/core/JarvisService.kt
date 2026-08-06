@@ -25,6 +25,7 @@ import com.jarvis.app.setup.SetupActivity
 import com.jarvis.app.speech.AudioCaptureManager
 import com.jarvis.app.speech.TTSEngine
 import com.jarvis.app.speech.WhisperSTTClient
+import com.jarvis.app.updater.UpdateChecker
 import kotlinx.coroutines.*
 
 class JarvisService : Service(), StateMachine.StateListener {
@@ -38,6 +39,7 @@ class JarvisService : Service(), StateMachine.StateListener {
     private lateinit var conversationContext: ConversationContext
     private lateinit var contactResolver: ContactResolver
     private lateinit var actionExecutor: ActionExecutor
+    private lateinit var updateChecker: UpdateChecker
 
     private var whisperClient: WhisperSTTClient? = null
     private var claudeParser: ClaudeIntentParser? = null
@@ -76,6 +78,11 @@ class JarvisService : Service(), StateMachine.StateListener {
         conversationContext = ConversationContext()
         contactResolver = ContactResolver(this)
         actionExecutor = ActionExecutor(this, contactResolver, notificationQueue)
+        updateChecker = UpdateChecker(this) { status ->
+            serviceScope.launch(Dispatchers.Main) {
+                ttsEngine.speak(status)
+            }
+        }
 
         // Load API keys and initialize clients
         initializeApiClients()
@@ -96,6 +103,9 @@ class JarvisService : Service(), StateMachine.StateListener {
         // Mark as running for boot receiver
         getSharedPreferences("jarvis_prefs", MODE_PRIVATE)
             .edit().putBoolean("service_running", true).apply()
+
+        // Start periodic update checks
+        updateChecker.startPeriodicChecks()
 
         // Announce ready
         ttsEngine.speak("Jarvis is ready.")
@@ -144,6 +154,7 @@ class JarvisService : Service(), StateMachine.StateListener {
 
         serviceScope.cancel()
         announceTimeoutJob?.cancel()
+        updateChecker.destroy()
         ServiceBridge.unregisterReceiver(this, broadcastReceiver)
         ttsEngine.shutdown()
         wakeLockManager.release()
