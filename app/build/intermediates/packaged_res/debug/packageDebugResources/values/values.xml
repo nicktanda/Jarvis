@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1E88E5</color>
+    <string name="accessibility_service_description">Jarvis uses this service to intercept volume button presses for hands-free control. Volume buttons are used to navigate notifications and trigger voice commands while the screen is off.</string>
+    <string name="app_name">Jarvis</string>
+    <string name="notification_channel_description">Keeps Jarvis running in the background</string>
+    <string name="notification_channel_name">Jarvis Service</string>
+    <style name="Theme.Jarvis" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <item name="colorPrimary">#1E88E5</item>
+        <item name="colorPrimaryVariant">#1565C0</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#43A047</item>
+        <item name="colorSecondaryVariant">#2E7D32</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+    </style>
+</resources>
