@@ -13,6 +13,9 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
  */
 object ServiceBridge {
 
+    @Volatile
+    var interceptVolumeButtons = false
+
     const val ACTION_NOTIFICATION = "com.jarvis.NOTIFICATION"
     const val ACTION_BUTTON_EVENT = "com.jarvis.BUTTON_EVENT"
     const val ACTION_COMMAND = "com.jarvis.COMMAND"

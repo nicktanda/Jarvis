@@ -2,6 +2,7 @@ package com.jarvis.app.speech
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -13,6 +14,7 @@ import java.util.UUID
 class TTSEngine(context: Context) {
 
     private var tts: TextToSpeech? = null
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var isReady = false
     private val pendingQueue = LinkedList<SpeechItem>()
     private var currentCallback: (() -> Unit)? = null
@@ -30,9 +32,34 @@ class TTSEngine(context: Context) {
                     engine.language = Locale.getDefault()
                     engine.setSpeechRate(1.1f)
 
-                    // Force output to phone speaker
+                    // Select a male voice if available
+                    try {
+                        val maleVoice = engine.voices?.firstOrNull { voice ->
+                            voice.locale.language == Locale.getDefault().language &&
+                            !voice.isNetworkConnectionRequired &&
+                            voice.name.lowercase().let { name ->
+                                name.contains("male") || name.contains("deep") ||
+                                // Common male voice IDs across TTS engines
+                                name.contains("-b-") || name.contains("-c-") ||
+                                name.contains("-d-") || name.contains("#male")
+                            }
+                        }
+                        if (maleVoice != null) {
+                            engine.voice = maleVoice
+                            Log.d(TAG, "Selected male voice: ${maleVoice.name}")
+                        } else {
+                            // Fallback: lower pitch for a more masculine tone
+                            engine.setPitch(0.8f)
+                            Log.d(TAG, "No male voice found, lowering pitch")
+                        }
+                    } catch (e: Exception) {
+                        engine.setPitch(0.8f)
+                        Log.d(TAG, "Voice selection failed, lowering pitch", e)
+                    }
+
+                    // Use alarm stream to always play through mute/silent
                     val audioAttributes = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setUsage(AudioAttributes.USAGE_ALARM)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                     engine.setAudioAttributes(audioAttributes)
@@ -85,8 +112,15 @@ class TTSEngine(context: Context) {
         isSpeaking = true
         currentCallback = item.onComplete
 
+        // Ensure alarm volume is audible
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+        if (currentVolume < maxVolume / 2) {
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume / 2, 0)
+        }
+
         val params = Bundle().apply {
-            putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, android.media.AudioManager.STREAM_MUSIC)
+            putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_ALARM)
         }
 
         val utteranceId = UUID.randomUUID().toString()

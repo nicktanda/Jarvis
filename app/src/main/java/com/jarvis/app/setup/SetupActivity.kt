@@ -31,7 +31,6 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var btnContacts: MaterialButton
     private lateinit var btnBattery: MaterialButton
     private lateinit var etClaudeKey: TextInputEditText
-    private lateinit var etWhisperKey: TextInputEditText
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
     private lateinit var tvStatus: TextView
@@ -76,7 +75,6 @@ class SetupActivity : AppCompatActivity() {
         btnContacts = findViewById(R.id.btnContacts)
         btnBattery = findViewById(R.id.btnBattery)
         etClaudeKey = findViewById(R.id.etClaudeKey)
-        etWhisperKey = findViewById(R.id.etWhisperKey)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
         tvStatus = findViewById(R.id.tvStatus)
@@ -178,11 +176,9 @@ class SetupActivity : AppCompatActivity() {
             )
 
             val claudeKey = etClaudeKey.text?.toString()?.trim()
-            val whisperKey = etWhisperKey.text?.toString()?.trim()
 
             prefs.edit().apply {
                 if (!claudeKey.isNullOrBlank()) putString("claude_key", claudeKey)
-                if (!whisperKey.isNullOrBlank()) putString("whisper_key", whisperKey)
                 apply()
             }
         } catch (e: Exception) {
@@ -203,10 +199,8 @@ class SetupActivity : AppCompatActivity() {
             )
 
             val claudeKey = prefs.getString("claude_key", null)
-            val whisperKey = prefs.getString("whisper_key", null)
 
             if (!claudeKey.isNullOrBlank()) etClaudeKey.setText(claudeKey)
-            if (!whisperKey.isNullOrBlank()) etWhisperKey.setText(whisperKey)
         } catch (e: Exception) {
             // First launch, no keys yet
         }
@@ -214,10 +208,9 @@ class SetupActivity : AppCompatActivity() {
 
     private fun startJarvis() {
         val claudeKey = etClaudeKey.text?.toString()?.trim()
-        val whisperKey = etWhisperKey.text?.toString()?.trim()
 
-        if (claudeKey.isNullOrBlank() || whisperKey.isNullOrBlank()) {
-            Toast.makeText(this, "Please enter both API keys", Toast.LENGTH_SHORT).show()
+        if (claudeKey.isNullOrBlank()) {
+            Toast.makeText(this, "Please enter your Anthropic API key", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -233,6 +226,9 @@ class SetupActivity : AppCompatActivity() {
 
         saveApiKeys()
 
+        getSharedPreferences("jarvis_prefs", MODE_PRIVATE)
+            .edit().putBoolean("service_running", true).apply()
+
         ContextCompat.startForegroundService(
             this,
             Intent(this, JarvisService::class.java)
@@ -243,6 +239,9 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun stopJarvis() {
+        getSharedPreferences("jarvis_prefs", MODE_PRIVATE)
+            .edit().putBoolean("service_running", false).apply()
+
         stopService(Intent(this, JarvisService::class.java))
         updateServiceStatus()
         Toast.makeText(this, "Jarvis stopped", Toast.LENGTH_SHORT).show()

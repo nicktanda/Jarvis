@@ -20,6 +20,11 @@ class VolumeButtonService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        // Let volume buttons work normally when Jarvis is idle
+        if (!ServiceBridge.interceptVolumeButtons) {
+            return super.onKeyEvent(event)
+        }
+
         when (event.keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP -> {
                 when (event.action) {

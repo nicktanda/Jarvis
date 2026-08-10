@@ -12,8 +12,80 @@ class NotificationCaptureService : NotificationListenerService() {
         private const val TAG = "NotificationCapture"
         // Store active notifications so we can reply to them later
         private val activeNotifications = java.util.concurrent.ConcurrentHashMap<String, StatusBarNotification>()
+        private var instance: NotificationCaptureService? = null
 
         fun getNotification(key: String): StatusBarNotification? = activeNotifications[key]
+
+        fun getAllActiveNotificationData(): List<NotificationData> {
+            val service = instance ?: return activeNotifications.values.mapNotNull { sbn ->
+                sbnToNotificationData(sbn, null)
+            }
+
+            return try {
+                service.activeNotifications
+                    ?.filter { sbn ->
+                        sbn.packageName != service.packageName && !sbn.isOngoing
+                    }
+                    ?.mapNotNull { sbn -> sbnToNotificationData(sbn, service) }
+                    ?: emptyList()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reading active notifications", e)
+                emptyList()
+            }
+        }
+
+        private fun sbnToNotificationData(sbn: StatusBarNotification, service: NotificationCaptureService?): NotificationData? {
+            val extras = sbn.notification.extras
+            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+            val text = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+                ?: ""
+
+            if (title.isBlank() && text.isBlank()) return null
+
+            val hasReply = sbn.notification.actions?.any { action ->
+                action.remoteInputs?.isNotEmpty() == true
+            } ?: false
+
+            val appName = if (service != null) {
+                try {
+                    val appInfo = service.packageManager.getApplicationInfo(sbn.packageName, 0)
+                    service.packageManager.getApplicationLabel(appInfo).toString()
+                } catch (e: Exception) {
+                    sbn.packageName.substringAfterLast('.')
+                }
+            } else {
+                sbn.packageName.substringAfterLast('.')
+            }
+
+            return NotificationData(
+                key = sbn.key,
+                packageName = sbn.packageName,
+                appName = appName,
+                title = title,
+                text = text,
+                hasReply = hasReply,
+                timestamp = sbn.postTime
+            )
+        }
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        instance = this
+        Log.d(TAG, "Notification listener connected")
+        try {
+            for (sbn in activeNotifications) {
+                Companion.activeNotifications[sbn.key] = sbn
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading active notifications", e)
+        }
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        instance = null
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -23,13 +95,7 @@ class NotificationCaptureService : NotificationListenerService() {
         // Skip ongoing notifications (music players, etc.)
         if (sbn.isOngoing) return
 
-        // Skip group summaries
         val extras = sbn.notification.extras
-        if (extras.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION)) {
-            // Still process group messages
-        }
-
-        val appName = getAppName(sbn.packageName)
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
@@ -44,9 +110,9 @@ class NotificationCaptureService : NotificationListenerService() {
         } ?: false
 
         // Store for later reply
-        val nKey = sbn.key
-        Companion.activeNotifications[nKey] = sbn
+        Companion.activeNotifications[sbn.key] = sbn
 
+        val appName = getAppName(sbn.packageName)
         Log.d(TAG, "Notification: $appName - $title: $text (reply=$hasReply)")
 
         ServiceBridge.sendNotification(
@@ -61,8 +127,7 @@ class NotificationCaptureService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        val nKey = sbn.key
-        Companion.activeNotifications.remove(nKey)
+        Companion.activeNotifications.remove(sbn.key)
     }
 
     private fun getAppName(packageName: String): String {
