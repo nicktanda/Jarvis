@@ -48,6 +48,10 @@ class SetupActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { updatePermissionStates() }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { updatePermissionStates() }
+
     private val contactsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { updatePermissionStates() }
@@ -124,6 +128,12 @@ class SetupActivity : AppCompatActivity() {
         }
 
         btnCheckUpdate.setOnClickListener {
+            // Request notification permission on Android 13+
+            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return@setOnClickListener
+            }
             btnCheckUpdate.text = "Checking..."
             btnCheckUpdate.isEnabled = false
             val updater = com.adam.app.updater.UpdateChecker(this) { status ->
