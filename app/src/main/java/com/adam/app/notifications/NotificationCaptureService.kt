@@ -46,17 +46,25 @@ class NotificationCaptureService : NotificationListenerService() {
         }
 
         fun getAllActiveNotificationData(): List<NotificationData> {
-            val service = instance ?: return activeNotifications.values.mapNotNull { sbn ->
-                sbnToNotificationData(sbn, null)
+            val service = instance
+            if (service == null) {
+                Log.w(TAG, "No listener instance, using cached notifications (${activeNotifications.size})")
+                return activeNotifications.values.mapNotNull { sbn ->
+                    sbnToNotificationData(sbn, null)
+                }
             }
 
             return try {
-                service.activeNotifications
-                    ?.filter { sbn ->
+                val all = service.activeNotifications ?: emptyArray()
+                Log.d(TAG, "System has ${all.size} active notifications")
+                all.forEach { sbn ->
+                    val extras = sbn.notification.extras
+                    Log.d(TAG, "  ${sbn.packageName}: title='${extras.getCharSequence(Notification.EXTRA_TITLE)}' text='${extras.getCharSequence(Notification.EXTRA_TEXT)}' ongoing=${sbn.isOngoing}")
+                }
+                all.filter { sbn ->
                         sbn.packageName != service.packageName && !sbn.isOngoing
                     }
-                    ?.mapNotNull { sbn -> sbnToNotificationData(sbn, service) }
-                    ?: emptyList()
+                    .mapNotNull { sbn -> sbnToNotificationData(sbn, service) }
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading active notifications", e)
                 emptyList()
@@ -65,9 +73,26 @@ class NotificationCaptureService : NotificationListenerService() {
 
         private fun sbnToNotificationData(sbn: StatusBarNotification, service: NotificationCaptureService?): NotificationData? {
             val extras = sbn.notification.extras
-            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()
+                ?: ""
+
+            // Try multiple text sources — apps like Instagram use different extras
             val text = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
                 ?: extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_INFO_TEXT)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString()
+                ?: run {
+                    // Try extracting from messaging style (WhatsApp, Instagram DMs, etc.)
+                    @Suppress("DEPRECATION")
+                    val messages = extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+                    messages?.lastOrNull()?.let { msg ->
+                        val bundle = msg as? android.os.Bundle
+                        bundle?.getCharSequence("text")?.toString()
+                    }
+                }
+                ?: sbn.notification.tickerText?.toString()
                 ?: ""
 
             if (title.isBlank() && text.isBlank()) return null

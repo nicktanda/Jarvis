@@ -7,7 +7,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AutomaticGainControl
-import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
@@ -29,7 +28,6 @@ class AudioPipeline(private val context: Context) {
     }
 
     private var audioRecord: AudioRecord? = null
-    private var noiseSuppressor: NoiseSuppressor? = null
     private var agc: AutomaticGainControl? = null
     private val isRunning = AtomicBoolean(false)
     private val listeners = CopyOnWriteArrayList<FrameListener>()
@@ -52,7 +50,7 @@ class AudioPipeline(private val context: Context) {
 
         try {
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG,
                 AUDIO_FORMAT,
@@ -71,12 +69,9 @@ class AudioPipeline(private val context: Context) {
             return false
         }
 
-        // Attach audio effects
+        // Attach AGC for consistent volume levels (skip NoiseSuppressor —
+        // it's too aggressive without an active call and kills speech audio)
         val sessionId = record.audioSessionId
-        if (NoiseSuppressor.isAvailable()) {
-            noiseSuppressor = NoiseSuppressor.create(sessionId)
-            Log.d(TAG, "NoiseSuppressor attached: ${noiseSuppressor != null}")
-        }
         if (AutomaticGainControl.isAvailable()) {
             agc = AutomaticGainControl.create(sessionId)
             Log.d(TAG, "AGC attached: ${agc != null}")
@@ -95,8 +90,6 @@ class AudioPipeline(private val context: Context) {
     fun stop() {
         if (!isRunning.getAndSet(false)) return
 
-        noiseSuppressor?.release()
-        noiseSuppressor = null
         agc?.release()
         agc = null
 

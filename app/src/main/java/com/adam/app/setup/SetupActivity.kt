@@ -124,7 +124,7 @@ class SetupActivity : AppCompatActivity() {
 
     private fun updatePermissionStates() {
         updateButton(btnNotificationAccess, "Notification Access", isNotificationListenerEnabled())
-        updateButton(btnAccessibility, "Accessibility Service", isAccessibilityEnabled())
+        updateButton(btnAccessibility, "Volume Buttons (optional)", isAccessibilityEnabled())
         updateButton(btnMicrophone, "Microphone", hasPermission(Manifest.permission.RECORD_AUDIO))
         updateButton(btnPhone, "Phone Calls", hasPermission(Manifest.permission.CALL_PHONE))
         updateButton(btnSms, "SMS", hasPermission(Manifest.permission.SEND_SMS))
@@ -219,10 +219,8 @@ class SetupActivity : AppCompatActivity() {
             return
         }
 
-        if (!isAccessibilityEnabled()) {
-            Toast.makeText(this, "Please enable the Accessibility Service first", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // Accessibility service is optional — volume buttons are a nice-to-have
+        // but all core interaction works through "Hey Adam" voice commands
 
         saveApiKeys()
 

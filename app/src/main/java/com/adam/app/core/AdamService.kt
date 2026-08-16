@@ -120,8 +120,18 @@ class AdamService : Service(), StateMachine.StateListener {
         // Acquire wake lock
         wakeLockManager.acquire()
 
-        // Start foreground
-        startForeground(NOTIFICATION_ID, buildForegroundNotification())
+        // Start foreground — try with microphone type, fall back to default
+        // (background-started services can't request mic type on Android 14+)
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                buildForegroundNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Mic foreground type denied (background start), using default", e)
+            startForeground(NOTIFICATION_ID, buildForegroundNotification())
+        }
 
         // Register for broadcasts from other services
         ServiceBridge.registerReceiver(
@@ -267,8 +277,7 @@ class AdamService : Service(), StateMachine.StateListener {
                         stateMachine.transition(AdamState.NOTIFY_OPTIONS)
                     }
                 }
-                // Listen in parallel — "stop" will cut the TTS short
-                listenForInterrupt()
+                // (interrupt detection removed — mic picks up TTS with on-device pipeline)
             }
 
             AdamState.NOTIFY_OPTIONS -> {
@@ -485,7 +494,6 @@ class AdamService : Service(), StateMachine.StateListener {
                     pendingNotifications = emptyList()
                     stateMachine.transition(AdamState.IDLE)
                 }
-                listenForInterrupt()
                 return@launch
             }
 
@@ -506,7 +514,6 @@ class AdamService : Service(), StateMachine.StateListener {
                     pendingNotifications = emptyList()
                     stateMachine.transition(AdamState.IDLE)
                 }
-                listenForInterrupt()
             } else {
                 ttsEngine.speak("I didn't catch which app. Say the app name, all, or cancel.") {
                     listenForAppSelection()
@@ -699,44 +706,34 @@ class AdamService : Service(), StateMachine.StateListener {
     }
 
     private fun handleParsedIntent(intent: IntentResult) {
-        // Handle all SMS — always use dictation mode so user can say "end message"
+        // Handle SMS intents
         if (intent is IntentResult.SendSms) {
-            // Check if the message already has an end phrase (complete in one utterance)
             if (intent.message.isNotBlank()) {
-                val stripped = OnDeviceSTTClient.stripEndPhrase(intent.message)
-                if (stripped != null && stripped.isNotBlank()) {
-                    // Message is complete — go straight to confirmation
-                    val action = actionExecutor.prepare(
-                        IntentResult.SendSms(intent.contactName, stripped),
-                        conversationContext.getRecentNotifications()
-                    )
-                    if (action != null) {
-                        pendingAction = action
-                        ttsEngine.speak(action.description) {
-                            stateMachine.transition(AdamState.CONFIRMING)
-                        }
-                    } else {
-                        ttsEngine.speak("I couldn't prepare that action.") {
-                            stateMachine.transition(AdamState.IDLE)
-                        }
+                // Message already provided (by Claude or user) — strip any end phrase and confirm
+                val message = OnDeviceSTTClient.stripEndPhrase(intent.message) ?: intent.message
+                val action = actionExecutor.prepare(
+                    IntentResult.SendSms(intent.contactName, message),
+                    conversationContext.getRecentNotifications()
+                )
+                if (action != null) {
+                    pendingAction = action
+                    ttsEngine.speak(action.description) {
+                        stateMachine.transition(AdamState.CONFIRMING)
                     }
-                    return
+                } else {
+                    ttsEngine.speak("I couldn't prepare that action.") {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
                 }
+                return
             }
 
-            // Enter dictation mode — store any existing message as the first chunk
+            // No message — enter dictation mode
             pendingSmsContact = intent.contactName
-            pendingSmsFirstChunk = intent.message.takeIf { it.isNotBlank() }
+            pendingSmsFirstChunk = null
 
-            if (pendingSmsFirstChunk != null) {
-                // Already have partial message, continue dictating
-                ttsEngine.speak("Continue. Say end message when you're done.") {
-                    stateMachine.transition(AdamState.LISTENING)
-                }
-            } else {
-                ttsEngine.speak("What would you like to say to ${intent.contactName}? Say end message when you're done.") {
-                    stateMachine.transition(AdamState.LISTENING)
-                }
+            ttsEngine.speak("What would you like to say to ${intent.contactName}? Say end message when you're done.") {
+                stateMachine.transition(AdamState.LISTENING)
             }
             return
         }
@@ -763,7 +760,6 @@ class AdamService : Service(), StateMachine.StateListener {
                     ttsEngine.speak(summary) {
                         listenForAppSelection()
                     }
-                    listenForInterrupt()
                 }
             }
 

@@ -2,6 +2,8 @@ package com.adam.app.speech
 
 import android.util.Log
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * On-device wake word detector using AudioPipeline + Silero VAD + whisper.cpp.
@@ -24,6 +26,8 @@ class OnDeviceWakeWordDetector(
 
     @Volatile
     private var isActive = false
+    private var isTranscribing = false
+    private val whisperMutex = Mutex()
     private val audioBuffer = mutableListOf<FloatArray>()
     private var isSpeaking = false
     private var silenceFrameCount = 0
@@ -51,10 +55,22 @@ class OnDeviceWakeWordDetector(
         scope.cancel()
     }
 
+    private var frameCount = 0
+
     override fun onAudioFrame(samples: FloatArray) {
         if (!isActive) return
 
         val prob = vadDetector.processFrame(samples)
+
+        // Log every 100th frame (~3.2s) to verify audio is flowing
+        frameCount++
+        if (frameCount % 100 == 0) {
+            // Check actual audio level (RMS)
+            var sum = 0.0
+            for (s in samples) sum += s * s
+            val rms = kotlin.math.sqrt(sum / samples.size)
+            Log.d(TAG, "Frame $frameCount, VAD prob: $prob, RMS: $rms, peak: ${samples.max()}")
+        }
 
         if (!isSpeaking) {
             if (prob >= SileroVadDetector.SPEECH_THRESHOLD) {
@@ -71,10 +87,18 @@ class OnDeviceWakeWordDetector(
                 if (silenceFrameCount >= SILENCE_FRAMES_END) {
                     // Utterance complete — check if it's a wake word
                     val frameCount = audioBuffer.size
-                    if (frameCount in MIN_SPEECH_FRAMES..MAX_SPEECH_FRAMES) {
+                    if (frameCount in MIN_SPEECH_FRAMES..MAX_SPEECH_FRAMES && !isTranscribing) {
                         val captured = flattenBuffer()
-                        scope.launch { checkWakeWord(captured) }
-                    } else {
+                        // Check average energy — skip if too quiet (noise, not speech)
+                        var sum = 0.0
+                        for (s in captured) sum += s * s
+                        val avgRms = kotlin.math.sqrt(sum / captured.size)
+                        if (avgRms < 0.01) {
+                            Log.d(TAG, "Skipping: avg RMS $avgRms too low")
+                        } else {
+                            scope.launch { checkWakeWord(captured) }
+                        }
+                    } else if (frameCount !in MIN_SPEECH_FRAMES..MAX_SPEECH_FRAMES) {
                         Log.d(TAG, "Skipping: ${frameCount} frames (too ${if (frameCount < MIN_SPEECH_FRAMES) "short" else "long"})")
                     }
                     resetDetection()
@@ -112,6 +136,8 @@ class OnDeviceWakeWordDetector(
     private suspend fun checkWakeWord(samples: FloatArray) {
         if (!isActive) return
 
+        whisperMutex.withLock {
+        isTranscribing = true
         try {
             val text = whisperEngine.transcribe(samples)
             val lower = text.lowercase().trim()
@@ -128,6 +154,9 @@ class OnDeviceWakeWordDetector(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Wake word transcription error", e)
+        } finally {
+            isTranscribing = false
         }
+        } // whisperMutex
     }
 }

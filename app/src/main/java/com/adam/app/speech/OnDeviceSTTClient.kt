@@ -17,16 +17,24 @@ class OnDeviceSTTClient(
         private const val TAG = "OnDeviceSTT"
 
         private val END_PHRASES = listOf(
-            "end message", "send it", "send message", "that's it",
-            "that's all", "done", "finish", "finished", "send that"
+            "end message", "and message", "end messages", "and messages",
+            "end the message", "end of message",
+            "send it", "send message", "send the message",
+            "send that", "send this"
         )
 
         fun stripEndPhrase(text: String): String? {
-            val lower = text.lowercase()
+            // Normalize: lowercase, strip punctuation
+            val normalized = text.lowercase()
+                .replace(Regex("[.,!?;:]"), "")
+                .trim()
             for (phrase in END_PHRASES) {
-                val idx = lower.indexOf(phrase)
+                val idx = normalized.indexOf(phrase)
                 if (idx != -1) {
-                    return text.substring(0, idx).trim()
+                    // Map back to original text position (approximate)
+                    // Use the normalized index but clamp to original length
+                    val originalIdx = idx.coerceAtMost(text.length)
+                    return text.substring(0, originalIdx).trim()
                 }
             }
             return null
@@ -62,6 +70,7 @@ class OnDeviceSTTClient(
         var speechStartMs = 0L
         val listenStartMs = System.currentTimeMillis()
         var speechDetected = false
+        var finishing = false
 
         val deferred = CompletableDeferred<Result<String>>()
 
@@ -69,7 +78,7 @@ class OnDeviceSTTClient(
 
         val listener = object : AudioPipeline.FrameListener {
             override fun onAudioFrame(samples: FloatArray) {
-                if (isCancelled || deferred.isCompleted) return
+                if (isCancelled || deferred.isCompleted || finishing) return
 
                 val now = System.currentTimeMillis()
 
@@ -95,14 +104,17 @@ class OnDeviceSTTClient(
                         deferred.complete(Result.failure(Exception("No speech detected")))
                     }
                 } else {
-                    // Currently speaking
-                    audioBuffer.add(samples.copyOf())
+                    // Currently speaking — cap buffer at 30s of audio (480000 samples)
+                    if (audioBuffer.size < 940) { // ~940 frames * 512 samples = 30s
+                        audioBuffer.add(samples.copyOf())
+                    }
 
                     if (prob < SileroVadDetector.SILENCE_THRESHOLD) {
                         if (silenceStartMs == 0L) silenceStartMs = now
                         if (now - silenceStartMs >= SPEECH_END_SILENCE_MS) {
                             // Speech ended
-                            Log.d(TAG, "Speech ended (silence)")
+                            Log.d(TAG, "Speech ended (silence), buffer: ${audioBuffer.size} frames")
+                            finishing = true
                             finishTranscription(audioBuffer, speechStartMs, deferred)
                         }
                     } else {
@@ -110,8 +122,8 @@ class OnDeviceSTTClient(
                     }
 
                     // Max duration safety
-                    if (now - listenStartMs > MAX_LISTEN_MS) {
-                        Log.d(TAG, "Max listen duration reached")
+                    if (now - speechStartMs > MAX_LISTEN_MS) {
+                        Log.d(TAG, "Max speech duration reached, buffer: ${audioBuffer.size} frames")
                         finishTranscription(audioBuffer, speechStartMs, deferred)
                     }
                 }
@@ -149,8 +161,8 @@ class OnDeviceSTTClient(
             offset += frame.size
         }
 
-        // Transcribe async (whisper runs on IO)
-        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+        // Transcribe on a coroutine (whisper mutex ensures sequential access)
+        CoroutineScope(Dispatchers.IO).launch {
             try {
                 val text = whisperEngine.transcribe(allSamples)
                 Log.d(TAG, "Transcription: $text")
