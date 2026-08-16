@@ -1,5 +1,6 @@
 package com.adam.app.core
 
+import android.app.NotificationManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -319,6 +320,13 @@ class AdamService : Service(), StateMachine.StateListener {
 
         conversationContext.addNotification(notif)
 
+        // Respect Do Not Disturb — silently queue notifications
+        if (isDoNotDisturbActive()) {
+            Log.d(TAG, "DND active, queuing notification from ${notif.appName}")
+            notificationQueue.enqueue(notif)
+            return
+        }
+
         // If idle, announce it. Otherwise queue for later.
         if (stateMachine.currentState == AdamState.IDLE) {
             currentNotification = notif
@@ -331,6 +339,11 @@ class AdamService : Service(), StateMachine.StateListener {
     private fun processNextNotification() {
         val next = notificationQueue.dequeue()
         if (next != null) {
+            // Don't announce during Do Not Disturb
+            if (isDoNotDisturbActive()) {
+                notificationQueue.enqueue(next)
+                return
+            }
             serviceScope.launch {
                 delay(1000) // Brief pause between notifications
                 if (stateMachine.currentState == AdamState.IDLE) {
@@ -842,6 +855,11 @@ class AdamService : Service(), StateMachine.StateListener {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save audio state", e)
         }
+    }
+
+    private fun isDoNotDisturbActive(): Boolean {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        return nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
     }
 
     private fun restoreAudioState() {
