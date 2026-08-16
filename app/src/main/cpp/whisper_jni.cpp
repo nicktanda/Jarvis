@@ -11,7 +11,7 @@
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_com_jarvis_app_speech_WhisperEngine_nativeInit(
+Java_com_adam_app_speech_WhisperEngine_nativeInit(
     JNIEnv *env, jobject thiz, jstring model_path) {
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
@@ -33,7 +33,7 @@ Java_com_jarvis_app_speech_WhisperEngine_nativeInit(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_jarvis_app_speech_WhisperEngine_nativeTranscribe(
+Java_com_adam_app_speech_WhisperEngine_nativeTranscribe(
     JNIEnv *env, jobject thiz, jlong context_ptr, jfloatArray audio_data) {
 
     auto *ctx = reinterpret_cast<struct whisper_context *>(context_ptr);
@@ -89,7 +89,7 @@ Java_com_jarvis_app_speech_WhisperEngine_nativeTranscribe(
 }
 
 JNIEXPORT void JNICALL
-Java_com_jarvis_app_speech_WhisperEngine_nativeRelease(
+Java_com_adam_app_speech_WhisperEngine_nativeRelease(
     JNIEnv *env, jobject thiz, jlong context_ptr) {
 
     auto *ctx = reinterpret_cast<struct whisper_context *>(context_ptr);

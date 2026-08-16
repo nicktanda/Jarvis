@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Jarvis</string>
-    <string name="accessibility_service_description">Jarvis uses this service to intercept volume button presses for hands-free control. Volume buttons are used to navigate notifications and trigger voice commands while the screen is off.</string>
-    <string name="notification_channel_name">Jarvis Service</string>
-    <string name="notification_channel_description">Keeps Jarvis running in the background</string>
+    <string name="app_name">Adam</string>
+    <string name="accessibility_service_description">Adam uses this service to intercept volume button presses for hands-free control. Volume buttons are used to navigate notifications and trigger voice commands while the screen is off.</string>
+    <string name="notification_channel_name">Adam Service</string>
+    <string name="notification_channel_description">Keeps Adam running in the background</string>
 </resources>

@@ -23,12 +23,12 @@
     </queries>
 
     <application
-        android:name=".JarvisApplication"
+        android:name=".AdamApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="Jarvis"
+        android:label="Adam"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Jarvis">
+        android:theme="@style/Theme.Adam">
 
         <activity
             android:name=".setup.SetupActivity"
@@ -40,7 +40,7 @@
         </activity>
 
         <service
-            android:name=".core.JarvisService"
+            android:name=".core.AdamService"
             android:foregroundServiceType="microphone|specialUse"
             android:exported="false">
             <property

@@ -5,12 +5,12 @@ plugins {
 }
 
 android {
-    namespace = "com.jarvis.app"
+    namespace = "com.adam.app"
     compileSdk = 35
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "com.jarvis.app"
+        applicationId = "com.adam.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

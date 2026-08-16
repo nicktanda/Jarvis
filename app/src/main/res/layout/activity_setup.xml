@@ -119,7 +119,7 @@
             android:id="@+id/btnStart"
             android:layout_width="match_parent"
             android:layout_height="56dp"
-            android:text="Start Jarvis"
+            android:text="Start Adam"
             android:textSize="18sp"
             android:layout_marginBottom="16dp" />
 
@@ -127,7 +127,7 @@
             android:id="@+id/btnStop"
             android:layout_width="match_parent"
             android:layout_height="48dp"
-            android:text="Stop Jarvis"
+            android:text="Stop Adam"
             android:textSize="14sp"
             android:backgroundTint="#C62828"
             android:visibility="gone" />
