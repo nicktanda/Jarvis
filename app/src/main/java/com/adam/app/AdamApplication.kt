@@ -24,12 +24,17 @@ class AdamApplication : Application() {
         }
         manager.createNotificationChannel(serviceChannel)
 
+        // Delete and recreate to pick up importance changes
+        manager.deleteNotificationChannel(UPDATE_CHANNEL_ID)
         val updateChannel = NotificationChannel(
             UPDATE_CHANNEL_ID,
             "Updates",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
             description = "Adam app update notifications"
+            enableVibration(true)
+            enableLights(true)
+            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
         }
         manager.createNotificationChannel(updateChannel)
     }
