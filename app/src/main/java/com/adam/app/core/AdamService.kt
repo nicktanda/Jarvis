@@ -473,8 +473,9 @@ class AdamService : Service(), StateMachine.StateListener {
             val speech = result.getOrNull()?.lowercase() ?: ""
             Log.d(TAG, "App selection: $speech")
 
-            val stopPatterns = listOf("stop", "cancel", "nevermind", "never mind", "nothing", "none", "no", "nope", "dismiss", "i'm good", "that's it", "that's all")
-            if (stopPatterns.any { speech.contains(it) }) {
+            val stopPatterns = listOf("stop", "cancel", "nevermind", "never mind", "nothing", "none", "nope", "dismiss", "i'm good", "that's it", "that's all")
+            val words = speech.replace(Regex("[.,!?]"), "").split(" ").map { it.trim() }
+            if (stopPatterns.any { pattern -> words.any { it == pattern } }) {
                 pendingNotifications = emptyList()
                 ttsEngine.speak("Okay.") {
                     stateMachine.transition(AdamState.IDLE)
@@ -498,6 +499,8 @@ class AdamService : Service(), StateMachine.StateListener {
             }
 
             // Match app name from speech
+            Log.d(TAG, "Matching against ${pendingNotifications.size} pending notifications:")
+            pendingNotifications.forEach { Log.d(TAG, "  appName='${it.appName}'") }
             val matched = pendingNotifications.filter { notif ->
                 speech.contains(notif.appName.lowercase())
             }

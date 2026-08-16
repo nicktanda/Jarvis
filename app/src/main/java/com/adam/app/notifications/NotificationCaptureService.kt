@@ -14,6 +14,33 @@ class NotificationCaptureService : NotificationListenerService() {
         private val activeNotifications = java.util.concurrent.ConcurrentHashMap<String, StatusBarNotification>()
         private var instance: NotificationCaptureService? = null
 
+        private val KNOWN_APPS = mapOf(
+            "com.instagram.android" to "Instagram",
+            "com.google.android.gm" to "Gmail",
+            "com.whatsapp" to "WhatsApp",
+            "com.facebook.katana" to "Facebook",
+            "com.facebook.orca" to "Messenger",
+            "com.twitter.android" to "X",
+            "com.snapchat.android" to "Snapchat",
+            "com.spotify.music" to "Spotify",
+            "com.google.android.apps.messaging" to "Messages",
+            "com.samsung.android.messaging" to "Messages",
+            "com.microsoft.teams" to "Teams",
+            "com.slack" to "Slack",
+            "com.discord" to "Discord",
+            "org.telegram.messenger" to "Telegram",
+            "com.linkedin.android" to "LinkedIn"
+        )
+
+        fun extractAppName(packageName: String): String {
+            KNOWN_APPS[packageName]?.let { return it }
+            val parts = packageName.split(".")
+            val skip = setOf("com", "android", "app", "apps", "org", "net", "io", "co", "google")
+            val meaningful = parts.firstOrNull { it !in skip && it.length > 2 }
+                ?: parts.lastOrNull() ?: packageName
+            return meaningful.replaceFirstChar { it.uppercase() }
+        }
+
         fun getNotification(key: String): StatusBarNotification? = activeNotifications[key]
 
         /**
@@ -61,10 +88,19 @@ class NotificationCaptureService : NotificationListenerService() {
                     val extras = sbn.notification.extras
                     Log.d(TAG, "  ${sbn.packageName}: title='${extras.getCharSequence(Notification.EXTRA_TITLE)}' text='${extras.getCharSequence(Notification.EXTRA_TEXT)}' ongoing=${sbn.isOngoing}")
                 }
-                all.filter { sbn ->
-                        sbn.packageName != service.packageName && !sbn.isOngoing
-                    }
-                    .mapNotNull { sbn -> sbnToNotificationData(sbn, service) }
+                val filtered = all.filter { sbn ->
+                    val pass = sbn.packageName != service.packageName && !sbn.isOngoing
+                    Log.d(TAG, "  filter ${sbn.packageName}: pass=$pass (ours=${sbn.packageName == service.packageName}, ongoing=${sbn.isOngoing})")
+                    pass
+                }
+                Log.d(TAG, "After filter: ${filtered.size} notifications")
+                val result = filtered.mapNotNull { sbn ->
+                    val data = sbnToNotificationData(sbn, service)
+                    Log.d(TAG, "  map ${sbn.packageName}: ${if (data != null) "appName='${data.appName}'" else "null (filtered)"}")
+                    data
+                }
+                Log.d(TAG, "Final result: ${result.size} notifications")
+                result
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading active notifications", e)
                 emptyList()
@@ -106,10 +142,11 @@ class NotificationCaptureService : NotificationListenerService() {
                     val appInfo = service.packageManager.getApplicationInfo(sbn.packageName, 0)
                     service.packageManager.getApplicationLabel(appInfo).toString()
                 } catch (e: Exception) {
-                    sbn.packageName.substringAfterLast('.')
+                    Log.w(TAG, "Failed to get app label for ${sbn.packageName}", e)
+                    extractAppName(sbn.packageName)
                 }
             } else {
-                sbn.packageName.substringAfterLast('.')
+                extractAppName(sbn.packageName)
             }
 
             return NotificationData(
@@ -189,7 +226,7 @@ class NotificationCaptureService : NotificationListenerService() {
             val appInfo = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(appInfo).toString()
         } catch (e: Exception) {
-            packageName.substringAfterLast('.')
+            extractAppName(packageName)
         }
     }
 }
