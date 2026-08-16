@@ -146,11 +146,12 @@ class UpdateChecker(
             // Save commit so we don't re-download, but keep showing notification
             saveLastInstalledCommit(commitSha)
 
-            onUpdateStatus("Update downloaded. Tap the notification to install.")
+            onUpdateStatus("Update downloaded. Installing.")
 
-            // Show a persistent notification with an install button
+            // Show notification AND launch installer directly
             withContext(Dispatchers.Main) {
                 showUpdateNotification(apkFile)
+                promptInstall(apkFile)
             }
 
         } catch (e: Exception) {
@@ -223,6 +224,21 @@ class UpdateChecker(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to show update notification", e)
             onUpdateStatus("Could not show update notification.")
+        }
+    }
+
+    private fun promptInstall(apkFile: File) {
+        try {
+            val uri = FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", apkFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch installer", e)
         }
     }
 
