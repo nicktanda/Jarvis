@@ -141,6 +141,15 @@
             android:textSize="14sp"
             android:gravity="center"
             android:layout_marginTop="16dp"
+            android:layout_marginBottom="16dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnCheckUpdate"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="Check for Update"
+            android:textSize="14sp"
             android:layout_marginBottom="32dp" />
     </LinearLayout>
 </ScrollView>

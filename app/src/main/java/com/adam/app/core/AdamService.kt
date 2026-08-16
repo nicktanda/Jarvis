@@ -240,9 +240,6 @@ class AdamService : Service(), StateMachine.StateListener {
                 restoreAudioState()
                 // Resume wake word detection (just re-registers as AudioPipeline listener)
                 wakeWordDetector.start()
-
-                // Process any queued notifications
-                processNextNotification()
             }
 
             AdamState.NOTIFY_ANNOUNCE -> {
@@ -328,21 +325,6 @@ class AdamService : Service(), StateMachine.StateListener {
         )
 
         conversationContext.addNotification(notif)
-
-        // Respect Do Not Disturb — silently queue notifications
-        if (isDoNotDisturbActive()) {
-            Log.d(TAG, "DND active, queuing notification from ${notif.appName}")
-            notificationQueue.enqueue(notif)
-            return
-        }
-
-        // If idle, announce it. Otherwise queue for later.
-        if (stateMachine.currentState == AdamState.IDLE) {
-            currentNotification = notif
-            stateMachine.transition(AdamState.NOTIFY_ANNOUNCE)
-        } else {
-            notificationQueue.enqueue(notif)
-        }
     }
 
     private fun processNextNotification() {

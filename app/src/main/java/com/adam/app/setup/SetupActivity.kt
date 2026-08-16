@@ -33,6 +33,7 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var etClaudeKey: TextInputEditText
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
+    private lateinit var btnCheckUpdate: MaterialButton
     private lateinit var tvStatus: TextView
 
     private val micPermissionLauncher = registerForActivityResult(
@@ -77,6 +78,7 @@ class SetupActivity : AppCompatActivity() {
         etClaudeKey = findViewById(R.id.etClaudeKey)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
+        btnCheckUpdate = findViewById(R.id.btnCheckUpdate)
         tvStatus = findViewById(R.id.tvStatus)
     }
 
@@ -119,6 +121,19 @@ class SetupActivity : AppCompatActivity() {
 
         btnStop.setOnClickListener {
             stopAdam()
+        }
+
+        btnCheckUpdate.setOnClickListener {
+            btnCheckUpdate.text = "Checking..."
+            btnCheckUpdate.isEnabled = false
+            val updater = com.adam.app.updater.UpdateChecker(this) { status ->
+                runOnUiThread {
+                    Toast.makeText(this, status, Toast.LENGTH_LONG).show()
+                    btnCheckUpdate.text = "Check for Update"
+                    btnCheckUpdate.isEnabled = true
+                }
+            }
+            updater.checkNow()
         }
     }
 

@@ -95,6 +95,7 @@ class UpdateChecker(
 
             if (!response.isSuccessful || body == null) {
                 Log.w(TAG, "GitHub API error: ${response.code}")
+                onUpdateStatus("Could not check for updates.")
                 return
             }
 
@@ -105,6 +106,7 @@ class UpdateChecker(
             val commitSha = extractCommitSha(release.body)
             if (commitSha == null) {
                 Log.w(TAG, "Could not extract commit SHA from release body")
+                onUpdateStatus("No release found.")
                 return
             }
 
@@ -112,6 +114,7 @@ class UpdateChecker(
             val lastInstalledCommit = getLastInstalledCommit()
             if (commitSha == lastInstalledCommit) {
                 Log.d(TAG, "Already on latest version ($commitSha)")
+                onUpdateStatus("Already on the latest version.")
                 return
             }
 

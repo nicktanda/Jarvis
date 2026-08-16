@@ -75,10 +75,8 @@ class NotificationCaptureService : NotificationListenerService() {
         fun getAllActiveNotificationData(): List<NotificationData> {
             val service = instance
             if (service == null) {
-                Log.w(TAG, "No listener instance, using cached notifications (${activeNotifications.size})")
-                return activeNotifications.values.mapNotNull { sbn ->
-                    sbnToNotificationData(sbn, null)
-                }
+                Log.w(TAG, "No listener instance, returning empty (cached data may be stale)")
+                return emptyList()
             }
 
             return try {
