@@ -110,22 +110,26 @@ class UpdateChecker(
                 return
             }
 
-            // Check if we already have this version
-            val lastInstalledCommit = getLastInstalledCommit()
-            if (commitSha == lastInstalledCommit) {
-                Log.d(TAG, "Already on latest version ($commitSha)")
-                onUpdateStatus("Already on the latest version.")
-                return
-            }
-
             // Find the APK asset
             val apkAsset = release.assets.find { it.name.endsWith(".apk") }
             if (apkAsset == null) {
                 Log.w(TAG, "No APK found in release assets")
+                onUpdateStatus("No release found.")
                 return
             }
 
-            Log.d(TAG, "Update available: $commitSha (current: $lastInstalledCommit)")
+            // Check if we already downloaded this commit
+            val lastDownloadedCommit = getLastInstalledCommit()
+            val existingApk = File(context.getExternalFilesDir(null), "adam-update.apk")
+
+            if (commitSha == lastDownloadedCommit && existingApk.exists()) {
+                Log.d(TAG, "Update already downloaded ($commitSha), re-showing notification")
+                withContext(Dispatchers.Main) { showUpdateNotification(existingApk) }
+                onUpdateStatus("Update ready to install.")
+                return
+            }
+
+            Log.d(TAG, "Update available: $commitSha (current: $lastDownloadedCommit)")
 
             // Max out alarm volume so the update announcement is heard
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -141,7 +145,7 @@ class UpdateChecker(
                 return
             }
 
-            // Save the commit SHA so we know what version we're installing
+            // Save commit so we don't re-download, but keep showing notification
             saveLastInstalledCommit(commitSha)
 
             onUpdateStatus("Update downloaded. Tap the notification to install.")
