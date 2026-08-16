@@ -41,7 +41,7 @@ class UpdateChecker(
         private const val REPO_OWNER = "nicktanda"
         private const val REPO_NAME = "Jarvis"
         private const val RELEASES_URL = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/tags/latest"
-        private const val CHECK_INTERVAL_MS = 60 * 1000L // 1 minute (testing)
+        private const val CHECK_INTERVAL_MS = 60 * 60 * 1000L // 1 hour
         private const val PREFS_NAME = "adam_updater"
         private const val KEY_LAST_COMMIT = "last_installed_commit"
         private const val UPDATE_NOTIFICATION_ID = 42
@@ -123,9 +123,7 @@ class UpdateChecker(
             val existingApk = File(context.getExternalFilesDir(null), "adam-update.apk")
 
             if (commitSha == lastDownloadedCommit && existingApk.exists()) {
-                Log.d(TAG, "Update already downloaded ($commitSha), re-showing notification")
-                withContext(Dispatchers.Main) { showUpdateNotification(existingApk) }
-                onUpdateStatus("Update ready to install.")
+                Log.d(TAG, "Update already downloaded ($commitSha), skipping")
                 return
             }
 
