@@ -16,6 +16,35 @@ class NotificationCaptureService : NotificationListenerService() {
 
         fun getNotification(key: String): StatusBarNotification? = activeNotifications[key]
 
+        /**
+         * Dismiss a notification and try to mark it as read.
+         * Looks for "Mark as read" / "Read" actions before dismissing.
+         */
+        fun dismissAndMarkRead(key: String) {
+            val service = instance ?: return
+            val sbn = activeNotifications[key] ?: return
+
+            // Try to trigger a "mark as read" action if the app provides one
+            try {
+                sbn.notification.actions?.firstOrNull { action ->
+                    val label = action.title?.toString()?.lowercase() ?: ""
+                    label.contains("mark") && label.contains("read") ||
+                    label == "read" ||
+                    label.contains("mark as read")
+                }?.actionIntent?.send()
+            } catch (e: Exception) {
+                Log.d(TAG, "No mark-as-read action for ${sbn.packageName}")
+            }
+
+            // Dismiss the notification from the status bar
+            try {
+                service.cancelNotification(key)
+                Log.d(TAG, "Dismissed notification: $key")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to dismiss notification", e)
+            }
+        }
+
         fun getAllActiveNotificationData(): List<NotificationData> {
             val service = instance ?: return activeNotifications.values.mapNotNull { sbn ->
                 sbnToNotificationData(sbn, null)

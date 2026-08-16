@@ -1,11 +1,15 @@
 package com.jarvis.app.speech
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
@@ -18,7 +22,7 @@ class WakeWordDetector(
 
     companion object {
         private const val TAG = "WakeWordDetector"
-        private const val RESTART_DELAY_MS = 300L
+        private const val RESTART_DELAY_MS = 500L
         private const val ERROR_BACKOFF_MS = 2000L
         private val WAKE_WORDS = listOf("jarvis", "hey jarvis", "hey travis", "hey jarvy", "hey service")
     }
@@ -28,7 +32,20 @@ class WakeWordDetector(
     private var isActive = false
     private var consecutiveErrors = 0
     private var savedMusicVolume = -1
+    private var savedNotificationVolume = -1
+    private var savedSystemVolume = -1
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val googleRecognizerComponent: ComponentName by lazy { findGoogleRecognizer() }
+
+    // Audio focus request used to briefly suppress the recognizer beep
+    private val beepSuppressFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        )
+        .build()
 
     fun start() {
         if (isActive) return
@@ -48,11 +65,8 @@ class WakeWordDetector(
         isActive = false
         scope.coroutineContext.cancelChildren()
         destroyRecognizer()
-        // Restore music volume if we muted it for the beep
-        if (savedMusicVolume >= 0) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, savedMusicVolume, 0)
-            savedMusicVolume = -1
-        }
+        restoreVolumes()
+        audioManager.abandonAudioFocusRequest(beepSuppressFocusRequest)
         Log.d(TAG, "Wake word detection stopped")
     }
 
@@ -62,13 +76,8 @@ class WakeWordDetector(
         destroyRecognizer()
 
         try {
-            recognizer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
-                Log.d(TAG, "Using on-device recognizer")
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(context)
-            }
+            recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            Log.d(TAG, "Using system default recognizer")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create SpeechRecognizer", e)
             restartWithBackoff()
@@ -151,33 +160,33 @@ class WakeWordDetector(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // Extend listening window
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 5000L)
         }
 
         try {
-            // Mute the beep sound that SpeechRecognizer plays on start
+            // Mute streams the recognizer beep may play on
+            // (STREAM_SYSTEM breaks NothingOS recognizer, so only mute MUSIC + NOTIFICATION)
             savedMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            savedNotificationVolume = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+            savedSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_SYSTEM)
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
+            // Set system to 1 (not 0 — zero breaks recognizer on some devices)
+            val minSystem = audioManager.getStreamMinVolume(AudioManager.STREAM_SYSTEM)
+            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, minSystem.coerceAtLeast(1), 0)
+            audioManager.requestAudioFocus(beepSuppressFocusRequest)
 
             recognizer?.startListening(intent)
 
-            // Restore music volume after a short delay (beep is brief)
+            // Restore after the beep window
             scope.launch {
-                delay(500)
-                if (savedMusicVolume >= 0) {
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, savedMusicVolume, 0)
-                    savedMusicVolume = -1
-                }
+                delay(800)
+                restoreVolumes()
+                audioManager.abandonAudioFocusRequest(beepSuppressFocusRequest)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start listening", e)
-            if (savedMusicVolume >= 0) {
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, savedMusicVolume, 0)
-                savedMusicVolume = -1
-            }
+            restoreVolumes()
+            audioManager.abandonAudioFocusRequest(beepSuppressFocusRequest)
             restartWithBackoff()
         }
     }
@@ -192,11 +201,37 @@ class WakeWordDetector(
 
     private fun restartWithBackoff() {
         if (!isActive) return
-        val backoff = ERROR_BACKOFF_MS * minOf(consecutiveErrors, 5)
+        // Cap backoff at 3 seconds to avoid long gaps where wake word isn't heard
+        val backoff = ERROR_BACKOFF_MS * minOf(consecutiveErrors, 2)
         scope.launch {
-            delay(backoff)
+            delay(backoff.coerceAtMost(3000L))
             if (isActive) startListening()
         }
+    }
+
+    private fun restoreVolumes() {
+        if (savedMusicVolume >= 0) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, savedMusicVolume, 0)
+            savedMusicVolume = -1
+        }
+        if (savedNotificationVolume >= 0) {
+            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, savedNotificationVolume, 0)
+            savedNotificationVolume = -1
+        }
+        if (savedSystemVolume >= 0) {
+            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, savedSystemVolume, 0)
+            savedSystemVolume = -1
+        }
+    }
+
+    private fun findGoogleRecognizer(): ComponentName {
+        // The Google Search app has the reliable cloud speech recognizer.
+        // Other com.google.android.* packages (tts, as/AiAi) expose
+        // RecognitionService but fail on many devices.
+        return ComponentName(
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.voicesearch.serviceapi.GoogleRecognitionService"
+        )
     }
 
     private fun destroyRecognizer() {

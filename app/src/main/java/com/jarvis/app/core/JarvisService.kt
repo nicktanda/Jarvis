@@ -24,9 +24,12 @@ import com.jarvis.app.notifications.NotificationCaptureService
 import com.jarvis.app.notifications.NotificationData
 import com.jarvis.app.notifications.NotificationQueue
 import com.jarvis.app.setup.SetupActivity
-import com.jarvis.app.speech.AndroidSTTClient
+import com.jarvis.app.speech.AudioPipeline
+import com.jarvis.app.speech.OnDeviceSTTClient
+import com.jarvis.app.speech.OnDeviceWakeWordDetector
+import com.jarvis.app.speech.SileroVadDetector
 import com.jarvis.app.speech.TTSEngine
-import com.jarvis.app.speech.WakeWordDetector
+import com.jarvis.app.speech.WhisperEngine
 import com.jarvis.app.updater.UpdateChecker
 import kotlinx.coroutines.*
 
@@ -34,7 +37,10 @@ class JarvisService : Service(), StateMachine.StateListener {
 
     private lateinit var stateMachine: StateMachine
     private lateinit var ttsEngine: TTSEngine
-    private lateinit var androidSTTClient: AndroidSTTClient
+    private lateinit var audioPipeline: AudioPipeline
+    private lateinit var vadDetector: SileroVadDetector
+    private lateinit var whisperEngine: WhisperEngine
+    private lateinit var sttClient: OnDeviceSTTClient
     private lateinit var wakeLockManager: WakeLockManager
     private lateinit var audioFocusManager: AudioFocusManager
     private lateinit var notificationQueue: NotificationQueue
@@ -42,13 +48,16 @@ class JarvisService : Service(), StateMachine.StateListener {
     private lateinit var contactResolver: ContactResolver
     private lateinit var actionExecutor: ActionExecutor
     private lateinit var updateChecker: UpdateChecker
-    private lateinit var wakeWordDetector: WakeWordDetector
+    private lateinit var wakeWordDetector: OnDeviceWakeWordDetector
 
     private var claudeParser: ClaudeIntentParser? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentNotification: NotificationData? = null
     private var pendingAction: ActionExecutor.ActionDescription? = null
+    private var pendingSmsContact: String? = null
+    private var pendingSmsFirstChunk: String? = null
+    private var pendingClarification: String? = null
     private var pendingNotifications: List<NotificationData> = emptyList()
     private var announceTimeoutJob: Job? = null
     private var savedRingerMode: Int = -1
@@ -76,7 +85,6 @@ class JarvisService : Service(), StateMachine.StateListener {
         // Initialize all components
         stateMachine = StateMachine(this)
         ttsEngine = TTSEngine(this)
-        androidSTTClient = AndroidSTTClient(this)
         wakeLockManager = WakeLockManager(this)
         audioFocusManager = AudioFocusManager(this)
         notificationQueue = NotificationQueue()
@@ -88,7 +96,13 @@ class JarvisService : Service(), StateMachine.StateListener {
                 ttsEngine.speak(status)
             }
         }
-        wakeWordDetector = WakeWordDetector(this) {
+
+        // On-device speech pipeline
+        audioPipeline = AudioPipeline(this)
+        vadDetector = SileroVadDetector(this)
+        whisperEngine = WhisperEngine(this)
+        sttClient = OnDeviceSTTClient(audioPipeline, vadDetector, whisperEngine)
+        wakeWordDetector = OnDeviceWakeWordDetector(audioPipeline, vadDetector, whisperEngine) {
             serviceScope.launch(Dispatchers.Main) {
                 if (stateMachine.currentState == JarvisState.IDLE) {
                     vibrate(100)
@@ -122,8 +136,18 @@ class JarvisService : Service(), StateMachine.StateListener {
         // Start periodic update checks
         updateChecker.startPeriodicChecks()
 
-        // Start wake word detection silently
-        wakeWordDetector.start()
+        // Initialize whisper model and start audio pipeline
+        serviceScope.launch {
+            try {
+                whisperEngine.init()
+                audioPipeline.start()
+                wakeWordDetector.start()
+                Log.d(TAG, "On-device speech pipeline ready")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize speech pipeline", e)
+                ttsEngine.speak("Speech engine failed to load. Voice commands unavailable.")
+            }
+        }
     }
 
     private fun initializeApiClients() {
@@ -163,6 +187,9 @@ class JarvisService : Service(), StateMachine.StateListener {
         serviceScope.cancel()
         announceTimeoutJob?.cancel()
         wakeWordDetector.destroy()
+        audioPipeline.stop()
+        whisperEngine.release()
+        vadDetector.release()
         updateChecker.destroy()
         ServiceBridge.unregisterReceiver(this, broadcastReceiver)
         ttsEngine.shutdown()
@@ -194,11 +221,17 @@ class JarvisService : Service(), StateMachine.StateListener {
 
         when (newState) {
             JarvisState.IDLE -> {
+                pendingSmsContact = null
+                pendingSmsFirstChunk = null
+                pendingClarification = null
                 announceTimeoutJob?.cancel()
                 audioFocusManager.abandonFocus()
                 restoreAudioState()
-                // Start listening for "Hey Jarvis" when idle
+                // Resume wake word detection (just re-registers as AudioPipeline listener)
                 wakeWordDetector.start()
+
+                // Process any queued notifications
+                processNextNotification()
             }
 
             JarvisState.NOTIFY_ANNOUNCE -> {
@@ -227,6 +260,7 @@ class JarvisService : Service(), StateMachine.StateListener {
                 announceTimeoutJob?.cancel()
                 currentNotification?.let { notif ->
                     conversationContext.setLastSpoken(notif, 0)
+                    NotificationCaptureService.dismissAndMarkRead(notif.key)
                     ttsEngine.speak(notif.toSpokenText()) {
                         // After reading, offer options
                         stateMachine.transition(JarvisState.NOTIFY_OPTIONS)
@@ -257,7 +291,6 @@ class JarvisService : Service(), StateMachine.StateListener {
 
             JarvisState.PROCESSING -> {
                 ttsEngine.speak("Processing.")
-                listenForInterrupt()
             }
 
             JarvisState.CONFIRMING -> {
@@ -284,8 +317,15 @@ class JarvisService : Service(), StateMachine.StateListener {
             hasReply = intent.getBooleanExtra(ServiceBridge.EXTRA_HAS_REPLY, false)
         )
 
-        // Store for later — only read when the user asks
         conversationContext.addNotification(notif)
+
+        // If idle, announce it. Otherwise queue for later.
+        if (stateMachine.currentState == JarvisState.IDLE) {
+            currentNotification = notif
+            stateMachine.transition(JarvisState.NOTIFY_ANNOUNCE)
+        } else {
+            notificationQueue.enqueue(notif)
+        }
     }
 
     private fun processNextNotification() {
@@ -323,7 +363,7 @@ class JarvisService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState != JarvisState.NOTIFY_OPTIONS) return
 
         serviceScope.launch {
-            val result = androidSTTClient.transcribe()
+            val result = sttClient.transcribe()
             if (stateMachine.currentState != JarvisState.NOTIFY_OPTIONS) return@launch
 
             val speech = result.getOrNull()?.lowercase() ?: ""
@@ -387,7 +427,7 @@ class JarvisService : Service(), StateMachine.StateListener {
 
     private fun listenForInterrupt() {
         serviceScope.launch {
-            val result = androidSTTClient.transcribe()
+            val result = sttClient.transcribe()
             val speech = result.getOrNull()?.lowercase() ?: return@launch
 
             val stopPatterns = listOf("stop", "jarvis stop", "shut up", "quiet", "enough", "cancel", "nevermind", "never mind")
@@ -405,21 +445,24 @@ class JarvisService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState == JarvisState.IDLE) return
 
         serviceScope.launch {
-            val result = androidSTTClient.transcribe()
+            val result = sttClient.transcribe()
             if (stateMachine.currentState == JarvisState.IDLE) return@launch
 
             val speech = result.getOrNull()?.lowercase() ?: ""
             Log.d(TAG, "App selection: $speech")
 
-            val stopPatterns = listOf("stop", "cancel", "nevermind", "never mind", "nothing", "no", "nope", "dismiss")
+            val stopPatterns = listOf("stop", "cancel", "nevermind", "never mind", "nothing", "none", "no", "nope", "dismiss", "i'm good", "that's it", "that's all")
             if (stopPatterns.any { speech.contains(it) }) {
                 pendingNotifications = emptyList()
-                stateMachine.transition(JarvisState.IDLE)
+                ttsEngine.speak("Okay.") {
+                    stateMachine.transition(JarvisState.IDLE)
+                }
                 return@launch
             }
 
             val allPatterns = listOf("all", "everything", "all of them", "read them all", "read all")
             if (allPatterns.any { speech.contains(it) }) {
+                pendingNotifications.forEach { NotificationCaptureService.dismissAndMarkRead(it.key) }
                 val summary = buildString {
                     pendingNotifications.forEachIndexed { index, notif ->
                         append("${index + 1}. From ${notif.appName}: ${notif.toSpokenText()}. ")
@@ -439,6 +482,7 @@ class JarvisService : Service(), StateMachine.StateListener {
             }
 
             if (matched.isNotEmpty()) {
+                matched.forEach { NotificationCaptureService.dismissAndMarkRead(it.key) }
                 val summary = buildString {
                     append("${matched.size} from ${matched.first().appName}. ")
                     matched.forEachIndexed { index, notif ->
@@ -462,7 +506,7 @@ class JarvisService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState != JarvisState.CONFIRMING) return
 
         serviceScope.launch {
-            val result = androidSTTClient.transcribe()
+            val result = sttClient.transcribe()
             if (stateMachine.currentState != JarvisState.CONFIRMING) return@launch
 
             val speech = result.getOrNull()?.lowercase() ?: ""
@@ -494,7 +538,7 @@ class JarvisService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState != JarvisState.NOTIFY_ANNOUNCE) return
 
         serviceScope.launch {
-            val result = androidSTTClient.transcribe()
+            val result = sttClient.transcribe()
             // State may have changed via volume buttons while listening
             if (stateMachine.currentState != JarvisState.NOTIFY_ANNOUNCE) return@launch
 
@@ -531,23 +575,100 @@ class JarvisService : Service(), StateMachine.StateListener {
 
         serviceScope.launch {
             // Step 1: Transcribe with Android SpeechRecognizer
-            val transcriptionResult = androidSTTClient.transcribe()
+            val transcriptionResult = sttClient.transcribe()
             vibrate(50) // Short buzz: "Done recording"
 
             val transcription = transcriptionResult.getOrNull()
             if (transcription.isNullOrBlank()) {
+                pendingSmsContact = null
+                pendingSmsFirstChunk = null
+                pendingClarification = null
                 ttsEngine.speak("I didn't catch that. Try again.") {
                     stateMachine.transition(JarvisState.IDLE)
                 }
                 return@launch
             }
 
-            stateMachine.transition(JarvisState.PROCESSING)
             Log.d(TAG, "Transcription: $transcription")
+
+            // If we were collecting a message body for SMS, use dictation mode
+            val smsContact = pendingSmsContact
+            if (smsContact != null) {
+                pendingSmsContact = null
+                val firstChunk = pendingSmsFirstChunk
+                pendingSmsFirstChunk = null
+
+                // Build parts list: any prior chunk from Claude + this transcription
+                val allParts = mutableListOf<String>()
+                if (firstChunk != null) allParts.add(firstChunk)
+
+                // Check if this chunk has an end phrase
+                val stripped = OnDeviceSTTClient.stripEndPhrase(transcription)
+                if (stripped != null) {
+                    if (stripped.isNotBlank()) allParts.add(stripped)
+                    val fullMessage = allParts.joinToString(" ")
+                    vibrate(50)
+                    if (fullMessage.isBlank()) {
+                        ttsEngine.speak("I didn't catch a message.") {
+                            stateMachine.transition(JarvisState.IDLE)
+                        }
+                    } else {
+                        // Message complete — go straight to confirmation
+                        val action = actionExecutor.prepare(
+                            IntentResult.SendSms(smsContact, fullMessage),
+                            conversationContext.getRecentNotifications()
+                        )
+                        if (action != null) {
+                            pendingAction = action
+                            ttsEngine.speak(action.description) {
+                                stateMachine.transition(JarvisState.CONFIRMING)
+                            }
+                        }
+                    }
+                    return@launch
+                }
+
+                // No end phrase yet — add this chunk and continue dictation
+                allParts.add(transcription)
+                val dictationResult = sttClient.transcribeDictation()
+                val restOfMessage = dictationResult.getOrNull() ?: ""
+                if (restOfMessage.isNotBlank()) allParts.add(restOfMessage)
+
+                val fullMessage = allParts.joinToString(" ")
+                vibrate(50)
+                if (fullMessage.isBlank()) {
+                    ttsEngine.speak("I didn't catch a message.") {
+                        stateMachine.transition(JarvisState.IDLE)
+                    }
+                } else {
+                    val action = actionExecutor.prepare(
+                        IntentResult.SendSms(smsContact, fullMessage),
+                        conversationContext.getRecentNotifications()
+                    )
+                    if (action != null) {
+                        pendingAction = action
+                        ttsEngine.speak(action.description) {
+                            stateMachine.transition(JarvisState.CONFIRMING)
+                        }
+                    }
+                }
+                return@launch
+            }
+
+            // If this is a follow-up to a clarification, give Claude context
+            val clarification = pendingClarification
+            pendingClarification = null
+            val commandForParsing = if (clarification != null) {
+                "I was asked: \"$clarification\" My answer: \"$transcription\""
+            } else {
+                transcription
+            }
+
+            stateMachine.transition(JarvisState.PROCESSING)
 
             // Step 2: Parse intent with Claude
             val parseResult = claudeParser!!.parse(
-                userCommand = transcription,
+                userCommand = commandForParsing,
                 context = conversationContext,
                 contactNames = contactResolver.getContactNames()
             )
@@ -565,6 +686,48 @@ class JarvisService : Service(), StateMachine.StateListener {
     }
 
     private fun handleParsedIntent(intent: IntentResult) {
+        // Handle all SMS — always use dictation mode so user can say "end message"
+        if (intent is IntentResult.SendSms) {
+            // Check if the message already has an end phrase (complete in one utterance)
+            if (intent.message.isNotBlank()) {
+                val stripped = OnDeviceSTTClient.stripEndPhrase(intent.message)
+                if (stripped != null && stripped.isNotBlank()) {
+                    // Message is complete — go straight to confirmation
+                    val action = actionExecutor.prepare(
+                        IntentResult.SendSms(intent.contactName, stripped),
+                        conversationContext.getRecentNotifications()
+                    )
+                    if (action != null) {
+                        pendingAction = action
+                        ttsEngine.speak(action.description) {
+                            stateMachine.transition(JarvisState.CONFIRMING)
+                        }
+                    } else {
+                        ttsEngine.speak("I couldn't prepare that action.") {
+                            stateMachine.transition(JarvisState.IDLE)
+                        }
+                    }
+                    return
+                }
+            }
+
+            // Enter dictation mode — store any existing message as the first chunk
+            pendingSmsContact = intent.contactName
+            pendingSmsFirstChunk = intent.message.takeIf { it.isNotBlank() }
+
+            if (pendingSmsFirstChunk != null) {
+                // Already have partial message, continue dictating
+                ttsEngine.speak("Continue. Say end message when you're done.") {
+                    stateMachine.transition(JarvisState.LISTENING)
+                }
+            } else {
+                ttsEngine.speak("What would you like to say to ${intent.contactName}? Say end message when you're done.") {
+                    stateMachine.transition(JarvisState.LISTENING)
+                }
+            }
+            return
+        }
+
         when (intent) {
             is IntentResult.ReadNotifications -> {
                 val active = NotificationCaptureService.getAllActiveNotificationData()
@@ -605,8 +768,9 @@ class JarvisService : Service(), StateMachine.StateListener {
             }
 
             is IntentResult.Unknown -> {
+                pendingClarification = intent.clarification
                 ttsEngine.speak(intent.clarification) {
-                    stateMachine.transition(JarvisState.IDLE)
+                    stateMachine.transition(JarvisState.LISTENING)
                 }
             }
 
@@ -625,8 +789,9 @@ class JarvisService : Service(), StateMachine.StateListener {
                 }
 
                 pendingAction = action
-                ttsEngine.speak(action.description)
-                stateMachine.transition(JarvisState.CONFIRMING)
+                ttsEngine.speak(action.description) {
+                    stateMachine.transition(JarvisState.CONFIRMING)
+                }
             }
         }
     }
@@ -640,11 +805,21 @@ class JarvisService : Service(), StateMachine.StateListener {
             return
         }
 
+        // For calls: release audio before dialing so the phone app gets clean audio routing
+        if (action.isCall) {
+            ttsEngine.stop()
+            audioFocusManager.abandonFocus()
+            restoreAudioState()
+        }
+
         serviceScope.launch {
             val success = withContext(Dispatchers.IO) { action.execute() }
             pendingAction = null
 
-            if (success) {
+            if (action.isCall) {
+                // Don't speak over the call — just go idle silently
+                stateMachine.transition(JarvisState.IDLE)
+            } else if (success) {
                 ttsEngine.speak("Done.") {
                     stateMachine.transition(JarvisState.IDLE)
                 }

@@ -8,6 +8,7 @@ import android.telephony.SmsManager
 import android.util.Log
 import com.jarvis.app.ai.IntentResult
 import com.jarvis.app.notifications.NotificationCaptureService
+import com.jarvis.app.speech.OnDeviceSTTClient
 import com.jarvis.app.notifications.NotificationData
 import com.jarvis.app.notifications.NotificationQueue
 
@@ -23,6 +24,7 @@ class ActionExecutor(
 
     data class ActionDescription(
         val description: String,
+        val isCall: Boolean = false,
         val execute: () -> Boolean
     )
 
@@ -60,14 +62,17 @@ class ActionExecutor(
             ) { false }
         }
 
+        // Strip end phrases like "end message", "send it", etc.
+        val message = OnDeviceSTTClient.stripEndPhrase(intent.message) ?: intent.message
+
         return ActionDescription(
-            "Sending text to ${contact.name}: ${intent.message}. Confirm?"
+            "Sending text to ${contact.name}: $message. Confirm?"
         ) {
             try {
                 val smsManager = context.getSystemService(SmsManager::class.java)
-                val parts = smsManager.divideMessage(intent.message)
+                val parts = smsManager.divideMessage(message)
                 if (parts.size == 1) {
-                    smsManager.sendTextMessage(contact.phoneNumber, null, intent.message, null, null)
+                    smsManager.sendTextMessage(contact.phoneNumber, null, message, null, null)
                 } else {
                     smsManager.sendMultipartTextMessage(contact.phoneNumber, null, parts, null, null)
                 }
@@ -89,7 +94,8 @@ class ActionExecutor(
         }
 
         return ActionDescription(
-            "Calling ${contact.name}. Confirm?"
+            "Calling ${contact.name}. Confirm?",
+            isCall = true
         ) {
             try {
                 val callIntent = Intent(Intent.ACTION_CALL).apply {

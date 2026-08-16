@@ -1,11 +1,17 @@
 package com.jarvis.app.updater
 
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.net.Uri
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
+import com.jarvis.app.JarvisApplication
+import com.jarvis.app.R
 import kotlinx.coroutines.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -38,6 +44,7 @@ class UpdateChecker(
         private const val CHECK_INTERVAL_MS = 60 * 60 * 1000L // 1 hour
         private const val PREFS_NAME = "jarvis_updater"
         private const val KEY_LAST_COMMIT = "last_installed_commit"
+        private const val UPDATE_NOTIFICATION_ID = 42
     }
 
     @Serializable
@@ -116,6 +123,12 @@ class UpdateChecker(
             }
 
             Log.d(TAG, "Update available: $commitSha (current: $lastInstalledCommit)")
+
+            // Max out alarm volume so the update announcement is heard
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+
             onUpdateStatus("Update available. Downloading.")
 
             // Download the APK
@@ -128,11 +141,11 @@ class UpdateChecker(
             // Save the commit SHA so we know what version we're installing
             saveLastInstalledCommit(commitSha)
 
-            onUpdateStatus("Update downloaded. Volume up to install.")
+            onUpdateStatus("Update downloaded. Tap the notification to install.")
 
-            // Trigger install on the main thread
+            // Show a persistent notification with an install button
             withContext(Dispatchers.Main) {
-                promptInstall(apkFile)
+                showUpdateNotification(apkFile)
             }
 
         } catch (e: Exception) {
@@ -167,7 +180,7 @@ class UpdateChecker(
         }
     }
 
-    private fun promptInstall(apkFile: File) {
+    private fun showUpdateNotification(apkFile: File) {
         try {
             val uri = FileProvider.getUriForFile(
                 context,
@@ -180,10 +193,29 @@ class UpdateChecker(
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
             }
 
-            context.startActivity(installIntent)
+            val pendingIntent = PendingIntent.getActivity(
+                context, 0, installIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(context, JarvisApplication.UPDATE_CHANNEL_ID)
+                .setContentTitle("Jarvis Update Ready")
+                .setContentText("Tap to install the latest version")
+                .setSmallIcon(R.drawable.ic_notification)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setOngoing(true)
+                .addAction(R.drawable.ic_notification, "Install Update", pendingIntent)
+                .build()
+
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(UPDATE_NOTIFICATION_ID, notification)
+
+            Log.d(TAG, "Update notification posted")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to prompt install", e)
-            onUpdateStatus("Could not open installer.")
+            Log.e(TAG, "Failed to show update notification", e)
+            onUpdateStatus("Could not show update notification.")
         }
     }
 

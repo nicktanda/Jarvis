@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.jarvis.app"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.jarvis.app"
@@ -14,6 +15,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -30,6 +35,12 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 }
 
@@ -49,4 +60,7 @@ dependencies {
 
     // Encrypted storage
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // ONNX Runtime for Silero VAD
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
 }

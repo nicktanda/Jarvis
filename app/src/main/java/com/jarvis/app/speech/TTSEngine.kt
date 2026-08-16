@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
@@ -17,6 +19,7 @@ class TTSEngine(context: Context) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var isReady = false
     private val pendingQueue = LinkedList<SpeechItem>()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var currentCallback: (() -> Unit)? = null
     private var isSpeaking = false
 
@@ -68,18 +71,24 @@ class TTSEngine(context: Context) {
                         override fun onStart(utteranceId: String?) {}
 
                         override fun onDone(utteranceId: String?) {
-                            isSpeaking = false
-                            currentCallback?.invoke()
-                            currentCallback = null
-                            processQueue()
+                            mainHandler.post {
+                                isSpeaking = false
+                                val cb = currentCallback
+                                currentCallback = null
+                                cb?.invoke()
+                                processQueue()
+                            }
                         }
 
                         @Deprecated("Deprecated in API")
                         override fun onError(utteranceId: String?) {
-                            isSpeaking = false
-                            currentCallback?.invoke()
-                            currentCallback = null
-                            processQueue()
+                            mainHandler.post {
+                                isSpeaking = false
+                                val cb = currentCallback
+                                currentCallback = null
+                                cb?.invoke()
+                                processQueue()
+                            }
                         }
                     })
 
