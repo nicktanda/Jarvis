@@ -57,7 +57,7 @@ jobs:
           sleep 2
           # Create new release
           gh release create latest \
-            app/build/outputs/apk/release/app-release-unsigned.apk \
+            app/build/outputs/apk/release/app-release.apk \
             --title "Latest Build" \
             --notes "${{ steps.commit.outputs.body }}" \
             --latest

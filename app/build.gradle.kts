@@ -27,14 +27,27 @@ android {
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "adamapp123"
+            keyAlias = "adam"
+            keyPassword = "adamapp123"
+        }
+    }
+
     buildFeatures {
         buildConfig = true
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
