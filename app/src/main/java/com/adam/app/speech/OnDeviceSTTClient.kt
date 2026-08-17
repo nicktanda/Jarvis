@@ -59,8 +59,16 @@ class OnDeviceSTTClient(
     /**
      * Listen for a single utterance. Returns the transcription.
      * Uses VAD to detect speech start/end, then transcribes with Whisper.
+     *
+     * @param leadoutMs  how long to ignore audio at start (TTS echo protection)
+     * @param silenceEndMs  how long silence after speech before we stop listening
+     * @param noSpeechTimeoutMs  how long to wait for any speech before timing out
      */
-    suspend fun transcribe(): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun transcribe(
+        leadoutMs: Long = LEADOUT_MS,
+        silenceEndMs: Long = SPEECH_END_SILENCE_MS,
+        noSpeechTimeoutMs: Long = NO_SPEECH_TIMEOUT_MS
+    ): Result<String> = withContext(Dispatchers.IO) {
         isCancelled = false
 
         val audioBuffer = mutableListOf<FloatArray>()
@@ -83,7 +91,7 @@ class OnDeviceSTTClient(
                 val now = System.currentTimeMillis()
 
                 // Skip early frames to let TTS echo dissipate
-                if (now - listenStartMs < LEADOUT_MS) return
+                if (now - listenStartMs < leadoutMs) return
 
                 val prob = vadDetector.processFrame(samples)
 
@@ -100,7 +108,7 @@ class OnDeviceSTTClient(
                         audioBuffer.addAll(preBuffer)
                         audioBuffer.add(samples.copyOf())
                         Log.d(TAG, "Speech started")
-                    } else if (now - listenStartMs > NO_SPEECH_TIMEOUT_MS) {
+                    } else if (now - listenStartMs > noSpeechTimeoutMs) {
                         deferred.complete(Result.failure(Exception("No speech detected")))
                     }
                 } else {
@@ -111,7 +119,7 @@ class OnDeviceSTTClient(
 
                     if (prob < SileroVadDetector.SILENCE_THRESHOLD) {
                         if (silenceStartMs == 0L) silenceStartMs = now
-                        if (now - silenceStartMs >= SPEECH_END_SILENCE_MS) {
+                        if (now - silenceStartMs >= silenceEndMs) {
                             // Speech ended
                             Log.d(TAG, "Speech ended (silence), buffer: ${audioBuffer.size} frames")
                             finishing = true

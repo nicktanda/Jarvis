@@ -367,7 +367,11 @@ class AdamService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState != AdamState.NOTIFY_OPTIONS) return
 
         serviceScope.launch {
-            val result = sttClient.transcribe()
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
             if (stateMachine.currentState != AdamState.NOTIFY_OPTIONS) return@launch
 
             val speech = result.getOrNull()?.lowercase() ?: ""
@@ -449,7 +453,11 @@ class AdamService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState == AdamState.IDLE) return
 
         serviceScope.launch {
-            val result = sttClient.transcribe()
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
             if (stateMachine.currentState == AdamState.IDLE) return@launch
 
             val speech = result.getOrNull()?.lowercase() ?: ""
@@ -511,7 +519,11 @@ class AdamService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState != AdamState.CONFIRMING) return
 
         serviceScope.launch {
-            val result = sttClient.transcribe()
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
             if (stateMachine.currentState != AdamState.CONFIRMING) return@launch
 
             val speech = result.getOrNull()?.lowercase() ?: ""
@@ -543,7 +555,11 @@ class AdamService : Service(), StateMachine.StateListener {
         if (stateMachine.currentState != AdamState.NOTIFY_ANNOUNCE) return
 
         serviceScope.launch {
-            val result = sttClient.transcribe()
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
             // State may have changed via volume buttons while listening
             if (stateMachine.currentState != AdamState.NOTIFY_ANNOUNCE) return@launch
 
