@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,21 +40,26 @@ jobs:
       - name: Get commit info
         id: commit
         run: |
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "message=$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
+          SHA=$(git rev-parse HEAD)
+          MSG=$(git log -1 --pretty=%s)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          # Use a delimiter for multiline-safe output
+          echo "body<<BODY_EOF" >> "$GITHUB_OUTPUT"
+          echo "Auto-built from commit $SHA" >> "$GITHUB_OUTPUT"
+          echo "$MSG" >> "$GITHUB_OUTPUT"
+          echo "BODY_EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Delete existing latest release
-        run: gh release delete latest --yes --cleanup-tag || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create latest release
+      - name: Update latest release
         run: |
+          # Delete existing release and tag if present
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          # Small delay to let GitHub process the deletion
+          sleep 2
+          # Create new release
           gh release create latest \
             app/build/outputs/apk/release/app-release-unsigned.apk \
             --title "Latest Build" \
-            --notes "Auto-built from commit ${{ steps.commit.outputs.sha }}
-          ${{ steps.commit.outputs.message }}" \
+            --notes "${{ steps.commit.outputs.body }}" \
             --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
