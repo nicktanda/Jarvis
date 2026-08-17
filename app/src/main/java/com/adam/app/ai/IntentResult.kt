@@ -9,6 +9,7 @@ sealed class IntentResult {
     object ReadNotifications : IntentResult()
     data class DismissNotification(val notificationIndex: Int) : IntentResult()
     data class WebSearch(val query: String) : IntentResult()
+    data class ReactToMessage(val notificationIndex: Int, val emoji: String) : IntentResult()
     object Repeat : IntentResult()
     data class Unknown(val clarification: String) : IntentResult()
 }
@@ -20,5 +21,6 @@ data class ParsedIntent(
     val message: String = "",
     val contact_name: String = "",
     val clarification: String = "",
-    val query: String = ""
+    val query: String = "",
+    val emoji: String = ""
 )

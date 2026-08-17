@@ -20,6 +20,29 @@ class ActionExecutor(
 
     companion object {
         private const val TAG = "ActionExecutor"
+
+        val EMOJI_MAP = mapOf(
+            "thumbs_up" to "\uD83D\uDC4D", "like" to "\uD83D\uDC4D",
+            "thumbs_down" to "\uD83D\uDC4E", "dislike" to "\uD83D\uDC4E",
+            "heart" to "❤\uFE0F", "love" to "❤\uFE0F",
+            "laugh" to "\uD83D\uDE02", "laughing" to "\uD83D\uDE02", "haha" to "\uD83D\uDE02",
+            "sad" to "\uD83D\uDE22", "crying" to "\uD83D\uDE22",
+            "wow" to "\uD83D\uDE2E", "surprised" to "\uD83D\uDE2E",
+            "angry" to "\uD83D\uDE21", "mad" to "\uD83D\uDE21",
+            "fire" to "\uD83D\uDD25",
+            "thumbs down" to "\uD83D\uDC4E",
+            "thumbs up" to "\uD83D\uDC4D",
+            "clap" to "\uD83D\uDC4F", "clapping" to "\uD83D\uDC4F",
+            "pray" to "\uD83D\uDE4F", "praying" to "\uD83D\uDE4F", "thanks" to "\uD83D\uDE4F",
+            "100" to "\uD83D\uDCAF", "hundred" to "\uD83D\uDCAF",
+            "eyes" to "\uD83D\uDC40",
+            "skull" to "\uD83D\uDC80", "dead" to "\uD83D\uDC80"
+        )
+
+        fun resolveEmoji(spoken: String): String? {
+            val lower = spoken.lowercase().trim()
+            return EMOJI_MAP[lower]
+        }
     }
 
     data class ActionDescription(
@@ -47,6 +70,9 @@ class ActionExecutor(
             }
             is IntentResult.WebSearch -> {
                 ActionDescription("Searching") { true }
+            }
+            is IntentResult.ReactToMessage -> {
+                prepareReaction(intent, recentNotifications)
             }
             is IntentResult.Repeat -> {
                 ActionDescription("Repeating") { true }
@@ -168,5 +194,52 @@ class ActionExecutor(
         return ActionDescription(
             "Dismissing notification from ${notification.appName}."
         ) { true } // Dismissal doesn't need confirmation
+    }
+
+    fun prepareReaction(
+        intent: IntentResult.ReactToMessage,
+        recentNotifications: List<NotificationData>
+    ): ActionDescription? {
+        val notification = recentNotifications.getOrNull(intent.notificationIndex)
+            ?: return ActionDescription("No notification to react to.") { false }
+
+        if (!notification.hasReply) {
+            return ActionDescription(
+                "The notification from ${notification.appName} doesn't support reactions."
+            ) { false }
+        }
+
+        val emoji = resolveEmoji(intent.emoji)
+            ?: return ActionDescription("I don't know that emoji.") { false }
+
+        val emojiName = intent.emoji.replace("_", " ")
+        return ActionDescription(
+            "Reacting to ${notification.appName} with $emojiName. Confirm?"
+        ) {
+            try {
+                val sbn = NotificationCaptureService.getNotification(notification.key)
+                    ?: return@ActionDescription false
+
+                val replyAction = sbn.notification.actions?.find { action ->
+                    action.remoteInputs?.isNotEmpty() == true
+                } ?: return@ActionDescription false
+
+                val remoteInput = replyAction.remoteInputs!!.first()
+                val replyIntent = Intent().apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val bundle = Bundle().apply {
+                    putCharSequence(remoteInput.resultKey, emoji)
+                }
+                android.app.RemoteInput.addResultsToIntent(replyAction.remoteInputs, replyIntent, bundle)
+                replyAction.actionIntent.send(context, 0, replyIntent)
+
+                Log.d(TAG, "Reaction $emoji sent to ${notification.appName}")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to react to notification", e)
+                false
+            }
+        }
     }
 }

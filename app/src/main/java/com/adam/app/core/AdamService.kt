@@ -62,6 +62,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private var pendingSmsFirstChunk: String? = null
     private var pendingClarification: String? = null
     private var pendingNotifications: List<NotificationData> = emptyList()
+    private var pendingReactionNotification: NotificationData? = null
     private var announceTimeoutJob: Job? = null
     private var savedRingerMode: Int = -1
     private var savedAlarmVolume: Int = -1
@@ -284,7 +285,7 @@ class AdamService : Service(), StateMachine.StateListener {
                 val options = buildString {
                     append("You can say repeat")
                     if (currentNotification?.hasReply == true) {
-                        append(", reply")
+                        append(", reply, react")
                     }
                     append(", next, or dismiss.")
                 }
@@ -382,6 +383,7 @@ class AdamService : Service(), StateMachine.StateListener {
 
             val repeatPatterns = listOf("repeat", "again", "read it again", "say it again")
             val replyPatterns = listOf("reply", "respond", "send", "write back", "tell them", "say")
+            val reactPatterns = listOf("react", "emoji")
             val dismissPatterns = listOf("dismiss", "done", "clear", "close", "delete")
             val nextPatterns = listOf("next", "skip", "move on")
             val stopPatterns = listOf("stop", "shut up", "quiet", "enough", "cancel")
@@ -393,6 +395,12 @@ class AdamService : Service(), StateMachine.StateListener {
                 }
                 repeatPatterns.any { speech.contains(it) } -> {
                     stateMachine.transition(AdamState.NOTIFY_READ)
+                }
+                reactPatterns.any { speech.contains(it) } && currentNotification?.hasReply == true -> {
+                    pendingReactionNotification = currentNotification
+                    ttsEngine.speak("What emoji? Say thumbs up, heart, laugh, or any emoji name.") {
+                        listenForEmojiSelection()
+                    }
                 }
                 replyPatterns.any { speech.contains(it) } && currentNotification?.hasReply == true -> {
                     // Treat as a voice command so Claude can parse the reply message
@@ -582,6 +590,130 @@ class AdamService : Service(), StateMachine.StateListener {
                 else -> {
                     // Didn't understand, try again
                     listenForYesNo()
+                }
+            }
+        }
+    }
+
+    // --- Reaction Selection Flow ---
+
+    private fun listenForReactionSelection() {
+        serviceScope.launch {
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
+            val speech = result.getOrNull()?.lowercase() ?: ""
+            Log.d(TAG, "Reaction selection: $speech")
+
+            val cancelPatterns = listOf("cancel", "stop", "never mind", "nevermind")
+            if (cancelPatterns.any { speech.contains(it) }) {
+                pendingNotifications = emptyList()
+                ttsEngine.speak("Cancelled.") {
+                    stateMachine.transition(AdamState.IDLE)
+                }
+                return@launch
+            }
+
+            // Try to match by number
+            val number = Regex("\\d+").find(speech)?.value?.toIntOrNull()
+            val numberWords = mapOf(
+                "first" to 1, "one" to 1,
+                "second" to 2, "two" to 2,
+                "third" to 3, "three" to 3,
+                "fourth" to 4, "four" to 4,
+                "fifth" to 5, "five" to 5,
+                "last" to pendingNotifications.size
+            )
+            val spokenNumber = numberWords.entries.firstOrNull { speech.contains(it.key) }?.value
+            val index = ((number ?: spokenNumber) ?: 0) - 1
+
+            // Try to match by app name
+            val matchedByApp = if (index < 0) {
+                pendingNotifications.indexOfFirst { speech.contains(it.appName.lowercase()) }
+            } else -1
+
+            val finalIndex = if (index in pendingNotifications.indices) index
+                else if (matchedByApp >= 0) matchedByApp
+                else -1
+
+            if (finalIndex < 0) {
+                ttsEngine.speak("I didn't catch which message. Say a number or the app name.") {
+                    listenForReactionSelection()
+                }
+                return@launch
+            }
+
+            val selected = pendingNotifications[finalIndex]
+            pendingReactionNotification = selected
+            pendingNotifications = emptyList()
+
+            ttsEngine.speak("What emoji? Say thumbs up, heart, laugh, or any emoji name.") {
+                listenForEmojiSelection()
+            }
+        }
+    }
+
+    private fun listenForEmojiSelection() {
+        serviceScope.launch {
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
+            val speech = result.getOrNull()?.lowercase() ?: ""
+            Log.d(TAG, "Emoji selection: $speech")
+
+            val cancelPatterns = listOf("cancel", "stop", "never mind", "nevermind")
+            if (cancelPatterns.any { speech.contains(it) }) {
+                pendingReactionNotification = null
+                ttsEngine.speak("Cancelled.") {
+                    stateMachine.transition(AdamState.IDLE)
+                }
+                return@launch
+            }
+
+            // Try to resolve the spoken emoji
+            val emoji = ActionExecutor.resolveEmoji(speech)
+                ?: ActionExecutor.EMOJI_MAP.entries.firstOrNull { speech.contains(it.key) }?.value
+
+            if (emoji == null) {
+                ttsEngine.speak("I don't know that emoji. Try thumbs up, heart, laugh, or fire.") {
+                    listenForEmojiSelection()
+                }
+                return@launch
+            }
+
+            val notification = pendingReactionNotification
+            if (notification == null) {
+                ttsEngine.speak("Something went wrong.") {
+                    stateMachine.transition(AdamState.IDLE)
+                }
+                return@launch
+            }
+
+            // Find the emoji name for spoken confirmation
+            val emojiName = ActionExecutor.EMOJI_MAP.entries
+                .firstOrNull { it.value == emoji }?.key?.replace("_", " ") ?: "emoji"
+
+            val intent = IntentResult.ReactToMessage(
+                notificationIndex = 0,
+                emoji = emojiName
+            )
+            val recentList = listOf(notification)
+            val action = actionExecutor.prepareReaction(intent, recentList)
+
+            if (action != null) {
+                pendingAction = action
+                pendingReactionNotification = null
+                ttsEngine.speak(action.description) {
+                    stateMachine.transition(AdamState.CONFIRMING)
+                }
+            } else {
+                pendingReactionNotification = null
+                ttsEngine.speak("Couldn't prepare that reaction.") {
+                    stateMachine.transition(AdamState.IDLE)
                 }
             }
         }
@@ -777,6 +909,46 @@ class AdamService : Service(), StateMachine.StateListener {
                     ttsEngine.speak("Nothing to repeat.") {
                         stateMachine.transition(AdamState.IDLE)
                     }
+                }
+            }
+
+            is IntentResult.ReactToMessage -> {
+                val recentNotifs = conversationContext.getRecentNotifications()
+                    .filter { it.hasReply }
+
+                if (recentNotifs.isEmpty()) {
+                    ttsEngine.speak("No messages to react to.") {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                    return
+                }
+
+                // If both index and emoji are specified, go straight to confirmation
+                if (intent.notificationIndex >= 0 && intent.emoji.isNotBlank()) {
+                    val action = actionExecutor.prepareReaction(intent, recentNotifs)
+                    if (action != null) {
+                        pendingAction = action
+                        ttsEngine.speak(action.description) {
+                            stateMachine.transition(AdamState.CONFIRMING)
+                        }
+                    } else {
+                        ttsEngine.speak("I couldn't prepare that reaction.") {
+                            stateMachine.transition(AdamState.IDLE)
+                        }
+                    }
+                    return
+                }
+
+                // Missing info — enter selection flow
+                val summary = buildString {
+                    append("Which message? ")
+                    recentNotifs.forEachIndexed { i, notif ->
+                        append("${i + 1}. From ${notif.appName}: ${notif.title}. ")
+                    }
+                }
+                pendingNotifications = recentNotifs
+                ttsEngine.speak(summary) {
+                    listenForReactionSelection()
                 }
             }
 

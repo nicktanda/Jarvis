@@ -37,6 +37,7 @@ Possible actions:
 {"action": "read_notifications"}
 {"action": "dismiss_notification", "notification_index": 0}
 {"action": "web_search", "query": "the search query"}
+{"action": "react_to_message", "notification_index": 0, "emoji": "thumbs_up"}
 {"action": "repeat"}
 {"action": "unknown", "clarification": "what you need to know"}
 
@@ -46,6 +47,7 @@ Rules:
 - If the user says "that" or "this" referring to a notification, use the last spoken notification.
 - For "reply" actions: use "reply_notification" if there's a notification to reply to, or "send_sms" if they're initiating a new message.
 - Use "web_search" when the user asks a question that requires looking something up online, wants to search for something, or asks about current events, facts, weather, sports scores, etc. Extract the core search query from their spoken request.
+- Use "react_to_message" when the user wants to react or emoji-react to a message/notification. Use notification_index -1 if no specific message is indicated. Map their spoken emoji to one of: thumbs_up, heart, laugh, sad, wow, angry, fire, thumbs_down, clap, pray, 100, eyes, skull. Use empty string for emoji if not specified.
 - Return ONLY valid JSON. No markdown, no explanation."""
     }
 
@@ -133,6 +135,10 @@ Rules:
                 notificationIndex = parsed.notification_index
             )
             "web_search" -> IntentResult.WebSearch(query = parsed.query)
+            "react_to_message" -> IntentResult.ReactToMessage(
+                notificationIndex = parsed.notification_index,
+                emoji = parsed.emoji
+            )
             "repeat" -> IntentResult.Repeat
             else -> IntentResult.Unknown(
                 clarification = parsed.clarification.ifEmpty { "I didn't understand that command." }
