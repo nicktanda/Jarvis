@@ -36,6 +36,17 @@ class UpdateChecker(
     private var checkJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    init {
+        // Clean up any previously downloaded APK on startup.
+        // If the app is running, either the user installed the update (and we're on the new version)
+        // or they chose not to (and it can be re-downloaded if needed).
+        val oldApk = File(context.getExternalFilesDir(null), "adam-update.apk")
+        if (oldApk.exists()) {
+            oldApk.delete()
+            Log.d(TAG, "Cleaned up old update APK on startup")
+        }
+    }
+
     companion object {
         private const val TAG = "UpdateChecker"
         private const val REPO_OWNER = "nicktanda"
@@ -122,8 +133,20 @@ class UpdateChecker(
             val lastDownloadedCommit = getLastInstalledCommit()
             val existingApk = File(context.getExternalFilesDir(null), "adam-update.apk")
 
-            if (commitSha == lastDownloadedCommit && existingApk.exists()) {
-                Log.d(TAG, "Update already downloaded ($commitSha), skipping")
+            if (commitSha == lastDownloadedCommit) {
+                if (existingApk.exists()) {
+                    // Downloaded this session but not yet installed — re-prompt
+                    Log.d(TAG, "Update already downloaded ($commitSha), re-prompting install")
+                    onUpdateStatus("Update ready. Installing.")
+                    withContext(Dispatchers.Main) {
+                        showUpdateNotification(existingApk)
+                        promptInstall(existingApk)
+                    }
+                } else {
+                    // APK was cleaned up on startup — we're already running this version
+                    Log.d(TAG, "Already up to date ($commitSha)")
+                    onUpdateStatus("Already up to date.")
+                }
                 return
             }
 
@@ -156,6 +179,7 @@ class UpdateChecker(
 
         } catch (e: Exception) {
             Log.e(TAG, "Update check failed", e)
+            onUpdateStatus("Update check failed.")
         }
     }
 
