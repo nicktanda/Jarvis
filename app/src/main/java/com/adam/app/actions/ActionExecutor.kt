@@ -45,6 +45,9 @@ class ActionExecutor(
             is IntentResult.ReadNotifications -> {
                 ActionDescription("Reading notifications") { true }
             }
+            is IntentResult.WebSearch -> {
+                ActionDescription("Searching") { true }
+            }
             is IntentResult.Repeat -> {
                 ActionDescription("Repeating") { true }
             }

@@ -36,6 +36,7 @@ Possible actions:
 {"action": "make_call", "contact_name": "contact name"}
 {"action": "read_notifications"}
 {"action": "dismiss_notification", "notification_index": 0}
+{"action": "web_search", "query": "the search query"}
 {"action": "repeat"}
 {"action": "unknown", "clarification": "what you need to know"}
 
@@ -44,6 +45,7 @@ Rules:
 - Match contact names loosely (e.g., "Mom" could match "Mom", "Mum", or a contact nicknamed "Mom").
 - If the user says "that" or "this" referring to a notification, use the last spoken notification.
 - For "reply" actions: use "reply_notification" if there's a notification to reply to, or "send_sms" if they're initiating a new message.
+- Use "web_search" when the user asks a question that requires looking something up online, wants to search for something, or asks about current events, facts, weather, sports scores, etc. Extract the core search query from their spoken request.
 - Return ONLY valid JSON. No markdown, no explanation."""
     }
 
@@ -130,6 +132,7 @@ Rules:
             "dismiss_notification" -> IntentResult.DismissNotification(
                 notificationIndex = parsed.notification_index
             )
+            "web_search" -> IntentResult.WebSearch(query = parsed.query)
             "repeat" -> IntentResult.Repeat
             else -> IntentResult.Unknown(
                 clarification = parsed.clarification.ifEmpty { "I didn't understand that command." }

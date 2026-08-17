@@ -31,6 +31,7 @@ import com.adam.app.speech.OnDeviceWakeWordDetector
 import com.adam.app.speech.SileroVadDetector
 import com.adam.app.speech.TTSEngine
 import com.adam.app.speech.WhisperEngine
+import com.adam.app.ai.WebSearcher
 import com.adam.app.updater.UpdateChecker
 import kotlinx.coroutines.*
 
@@ -52,6 +53,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private lateinit var wakeWordDetector: OnDeviceWakeWordDetector
 
     private var claudeParser: ClaudeIntentParser? = null
+    private var webSearcher: WebSearcher? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentNotification: NotificationData? = null
@@ -177,6 +179,7 @@ class AdamService : Service(), StateMachine.StateListener {
 
             if (claudeKey != null) {
                 claudeParser = ClaudeIntentParser(claudeKey)
+                webSearcher = WebSearcher(claudeKey)
             } else {
                 Log.w(TAG, "Claude API key not set")
             }
@@ -773,6 +776,18 @@ class AdamService : Service(), StateMachine.StateListener {
                 } else {
                     ttsEngine.speak("Nothing to repeat.") {
                         stateMachine.transition(AdamState.IDLE)
+                    }
+                }
+            }
+
+            is IntentResult.WebSearch -> {
+                ttsEngine.speak("Searching.") {
+                    serviceScope.launch {
+                        val result = webSearcher?.search(intent.query)
+                            ?: "Search is not available."
+                        ttsEngine.speak(result) {
+                            stateMachine.transition(AdamState.IDLE)
+                        }
                     }
                 }
             }

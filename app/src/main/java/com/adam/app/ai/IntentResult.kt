@@ -8,6 +8,7 @@ sealed class IntentResult {
     data class MakeCall(val contactName: String) : IntentResult()
     object ReadNotifications : IntentResult()
     data class DismissNotification(val notificationIndex: Int) : IntentResult()
+    data class WebSearch(val query: String) : IntentResult()
     object Repeat : IntentResult()
     data class Unknown(val clarification: String) : IntentResult()
 }
@@ -18,5 +19,6 @@ data class ParsedIntent(
     val notification_index: Int = 0,
     val message: String = "",
     val contact_name: String = "",
-    val clarification: String = ""
+    val clarification: String = "",
+    val query: String = ""
 )
