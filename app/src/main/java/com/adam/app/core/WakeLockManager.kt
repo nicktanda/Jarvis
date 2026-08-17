@@ -5,6 +5,12 @@ import android.os.PowerManager
 
 class WakeLockManager(context: Context) {
 
+    companion object {
+        // 30-minute timeout — re-acquire periodically rather than holding indefinitely.
+        // If the service gets into a bad state, the CPU can eventually sleep.
+        private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L
+    }
+
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -15,7 +21,7 @@ class WakeLockManager(context: Context) {
                 "adam:core_wake_lock"
             )
         }
-        wakeLock?.acquire()
+        wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
     }
 
     fun release() {

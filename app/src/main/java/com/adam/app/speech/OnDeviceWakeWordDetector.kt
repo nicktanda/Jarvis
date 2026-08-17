@@ -31,6 +31,7 @@ class OnDeviceWakeWordDetector(
     private val audioBuffer = mutableListOf<FloatArray>()
     private var isSpeaking = false
     private var silenceFrameCount = 0
+    private var lastVadProb = 0f
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun start() {
@@ -60,16 +61,14 @@ class OnDeviceWakeWordDetector(
     override fun onAudioFrame(samples: FloatArray) {
         if (!isActive) return
 
-        val prob = vadDetector.processFrame(samples)
-
-        // Log every 100th frame (~3.2s) to verify audio is flowing
         frameCount++
-        if (frameCount % 100 == 0) {
-            // Check actual audio level (RMS)
-            var sum = 0.0
-            for (s in samples) sum += s * s
-            val rms = kotlin.math.sqrt(sum / samples.size)
-            Log.d(TAG, "Frame $frameCount, VAD prob: $prob, RMS: $rms, peak: ${samples.max()}")
+
+        // Only run VAD every 3rd frame (~10/sec instead of 31) to save CPU.
+        // During speech, still buffer every frame for Whisper.
+        val prob = if (isSpeaking || frameCount % 3 == 0) {
+            vadDetector.processFrame(samples).also { lastVadProb = it }
+        } else {
+            lastVadProb
         }
 
         if (!isSpeaking) {

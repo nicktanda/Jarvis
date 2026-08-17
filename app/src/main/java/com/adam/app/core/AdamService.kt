@@ -64,6 +64,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private var pendingNotifications: List<NotificationData> = emptyList()
     private var pendingReactionNotification: NotificationData? = null
     private var announceTimeoutJob: Job? = null
+    private var wakeLockRenewalJob: Job? = null
     private var savedRingerMode: Int = -1
     private var savedAlarmVolume: Int = -1
 
@@ -123,8 +124,9 @@ class AdamService : Service(), StateMachine.StateListener {
         // Load API keys and initialize clients
         initializeApiClients()
 
-        // Acquire wake lock
+        // Acquire wake lock (with timeout — renewed periodically)
         wakeLockManager.acquire()
+        startWakeLockRenewal()
 
         // Start foreground — try with microphone type, fall back to default
         // (background-started services can't request mic type on Android 14+)
@@ -192,6 +194,15 @@ class AdamService : Service(), StateMachine.StateListener {
         }
     }
 
+    private fun startWakeLockRenewal() {
+        wakeLockRenewalJob = serviceScope.launch {
+            while (isActive) {
+                delay(20 * 60 * 1000L) // Renew every 20 min (timeout is 30 min)
+                wakeLockManager.acquire()
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
     }
@@ -204,6 +215,7 @@ class AdamService : Service(), StateMachine.StateListener {
 
         serviceScope.cancel()
         announceTimeoutJob?.cancel()
+        wakeLockRenewalJob?.cancel()
         wakeWordDetector.destroy()
         audioPipeline.stop()
         whisperEngine.release()
