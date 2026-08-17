@@ -97,7 +97,10 @@ class AdamService : Service(), StateMachine.StateListener {
         actionExecutor = ActionExecutor(this, contactResolver, notificationQueue)
         updateChecker = UpdateChecker(this) { status ->
             serviceScope.launch(Dispatchers.Main) {
-                ttsEngine.speak(status)
+                // Only announce when an update is actually available — skip "Already up to date", errors, etc.
+                if ("Downloading" in status || "Installing" in status) {
+                    ttsEngine.speak(status)
+                }
             }
         }
 
