@@ -19,6 +19,16 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
+
+        // Embed git commit SHA so the update checker can compare against the running version
+        val gitSha = providers.exec {
+            commandLine("git", "rev-parse", "HEAD")
+        }.standardOutput.asText.get().trim()
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {

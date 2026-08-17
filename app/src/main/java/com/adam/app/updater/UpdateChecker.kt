@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import com.adam.app.AdamApplication
+import com.adam.app.BuildConfig
 import com.adam.app.R
 import kotlinx.coroutines.*
 import kotlinx.serialization.Serializable
@@ -129,11 +130,11 @@ class UpdateChecker(
                 return
             }
 
-            // Check if we already downloaded this commit
-            val lastDownloadedCommit = getLastInstalledCommit()
+            // Check against stored commit or the built-in SHA from build time
+            val knownCommit = getLastInstalledCommit() ?: BuildConfig.GIT_SHA
             val existingApk = File(context.getExternalFilesDir(null), "adam-update.apk")
 
-            if (commitSha == lastDownloadedCommit) {
+            if (commitSha == knownCommit) {
                 if (existingApk.exists()) {
                     // Downloaded this session but not yet installed — re-prompt
                     Log.d(TAG, "Update already downloaded ($commitSha), re-prompting install")
@@ -150,7 +151,7 @@ class UpdateChecker(
                 return
             }
 
-            Log.d(TAG, "Update available: $commitSha (current: $lastDownloadedCommit)")
+            Log.d(TAG, "Update available: $commitSha (current: $knownCommit)")
 
             // Max out alarm volume so the update announcement is heard
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
