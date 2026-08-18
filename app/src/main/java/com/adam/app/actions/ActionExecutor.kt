@@ -79,7 +79,8 @@ class ActionExecutor(
             }
             is IntentResult.StartConversation,
             is IntentResult.ContinueConversation,
-            is IntentResult.ListConversations -> {
+            is IntentResult.ListConversations,
+            is IntentResult.ReadNews -> {
                 null // Handled directly by AdamService
             }
             is IntentResult.Unknown -> {

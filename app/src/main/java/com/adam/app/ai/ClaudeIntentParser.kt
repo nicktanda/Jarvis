@@ -41,6 +41,7 @@ Possible actions:
 {"action": "start_conversation", "topic": "what they want to discuss"}
 {"action": "continue_conversation", "topic": "topic to search for"}
 {"action": "list_conversations"}
+{"action": "read_news", "topic": "optional topic"}
 {"action": "repeat"}
 {"action": "unknown", "clarification": "what you need to know"}
 
@@ -54,6 +55,7 @@ Rules:
 - Use "react_to_message" when the user wants to react or emoji-react to a message/notification. Use notification_index -1 if no specific message is indicated. Map their spoken emoji to one of: thumbs_up, heart, laugh, sad, wow, angry, fire, thumbs_down, clap, pray, 100, eyes, skull. Use empty string for emoji if not specified.
 - Use "continue_conversation" when the user says "continue conversation", "continue our conversation", "resume conversation", "go back to our chat", "pick up where we left off", or similar. If they specify a topic (e.g. "continue conversation about angry birds"), include it. If they just say "continue conversation" with no topic, use an empty topic string.
 - Use "list_conversations" ONLY when the user explicitly asks to list or show their conversations, e.g. "list my conversations", "show my conversations", "what conversations do I have".
+- Use "read_news" when the user asks for news, headlines, or current events summary. E.g. "what's in the news", "read me the news", "any news about technology", "give me the headlines". If they specify a topic (e.g. "tech news", "sports news"), include it. Otherwise use empty topic.
 - Return ONLY valid JSON. No markdown, no explanation."""
     }
 
@@ -148,6 +150,7 @@ Rules:
             "start_conversation" -> IntentResult.StartConversation(topic = parsed.topic)
             "continue_conversation" -> IntentResult.ContinueConversation(topic = parsed.topic)
             "list_conversations" -> IntentResult.ListConversations
+            "read_news" -> IntentResult.ReadNews(topic = parsed.topic)
             "repeat" -> IntentResult.Repeat
             else -> IntentResult.Unknown(
                 clarification = parsed.clarification.ifEmpty { "I didn't understand that command." }

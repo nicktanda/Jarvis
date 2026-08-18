@@ -13,6 +13,7 @@ sealed class IntentResult {
     data class StartConversation(val topic: String) : IntentResult()
     data class ContinueConversation(val topic: String) : IntentResult()
     object ListConversations : IntentResult()
+    data class ReadNews(val topic: String) : IntentResult()
     object Repeat : IntentResult()
     data class Unknown(val clarification: String) : IntentResult()
 }

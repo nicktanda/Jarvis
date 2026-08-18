@@ -34,6 +34,7 @@ import com.adam.app.speech.TTSEngine
 import com.adam.app.speech.WhisperEngine
 import com.adam.app.data.ConversationEntity
 import com.adam.app.ai.ConversationEngine
+import com.adam.app.ai.NewsReader
 import com.adam.app.ai.TextProcessor
 import com.adam.app.ai.WebSearcher
 import com.adam.app.updater.UpdateChecker
@@ -61,6 +62,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private var webSearcher: WebSearcher? = null
     private var conversationEngine: ConversationEngine? = null
     private var textProcessor: TextProcessor? = null
+    private var newsReader: NewsReader? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentNotification: NotificationData? = null
@@ -71,6 +73,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private var pendingNotifications: List<NotificationData> = emptyList()
     private var pendingReactionNotification: NotificationData? = null
     private var pendingConversations: List<ConversationEntity> = emptyList()
+    private var pendingHeadlines: List<NewsReader.Headline> = emptyList()
     private var conversationJob: Job? = null
     private var announceTimeoutJob: Job? = null
     private var wakeLockRenewalJob: Job? = null
@@ -217,6 +220,7 @@ class AdamService : Service(), StateMachine.StateListener {
                 webSearcher = WebSearcher(claudeKey)
                 conversationEngine = ConversationEngine(this, claudeKey)
                 textProcessor = TextProcessor(claudeKey)
+                newsReader = NewsReader(claudeKey)
             } else {
                 Log.w(TAG, "Claude API key not set")
             }
@@ -838,6 +842,74 @@ class AdamService : Service(), StateMachine.StateListener {
         }
     }
 
+    // --- News Selection ---
+
+    private fun listenForHeadlineSelection() {
+        serviceScope.launch {
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 10000L
+            )
+            val speech = result.getOrNull()?.lowercase() ?: ""
+            Log.d(TAG, "Headline selection: $speech")
+
+            val cancelPatterns = listOf("cancel", "stop", "never mind", "nevermind", "none", "no", "nothing")
+            if (cancelPatterns.any { speech.contains(it) }) {
+                pendingHeadlines = emptyList()
+                ttsEngine.speak("Okay.") {
+                    stateMachine.transition(AdamState.IDLE)
+                }
+                return@launch
+            }
+
+            // Match by number
+            val number = Regex("\\d+").find(speech)?.value?.toIntOrNull()
+            val numberWords = mapOf(
+                "first" to 1, "one" to 1,
+                "second" to 2, "two" to 2,
+                "third" to 3, "three" to 3,
+                "fourth" to 4, "four" to 4,
+                "fifth" to 5, "five" to 5,
+                "last" to pendingHeadlines.size
+            )
+            val spokenNumber = numberWords.entries.firstOrNull { speech.contains(it.key) }?.value
+            val index = ((number ?: spokenNumber) ?: 0) - 1
+
+            // Match by keyword in headline title
+            val matchedByKeyword = if (index < 0) {
+                pendingHeadlines.indexOfFirst { h ->
+                    h.title.lowercase().split(" ").any { word ->
+                        word.length > 3 && speech.contains(word)
+                    }
+                }
+            } else -1
+
+            val finalIndex = if (index in pendingHeadlines.indices) index
+                else if (matchedByKeyword >= 0) matchedByKeyword
+                else -1
+
+            if (finalIndex < 0) {
+                ttsEngine.speak("I didn't catch which one. Say a number or a keyword from the headline.") {
+                    listenForHeadlineSelection()
+                }
+                return@launch
+            }
+
+            val selected = pendingHeadlines[finalIndex]
+            pendingHeadlines = emptyList()
+
+            ttsEngine.speak("Here's more on that story.") {
+                serviceScope.launch {
+                    val summary = newsReader!!.summarize(selected.title)
+                    ttsEngine.speak(summary) {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                }
+            }
+        }
+    }
+
     // --- Conversation Mode ---
 
     private fun startConversationLoop() {
@@ -1256,6 +1328,37 @@ class AdamService : Service(), StateMachine.StateListener {
                         }
                         ttsEngine.speak(list) {
                             stateMachine.transition(AdamState.IDLE)
+                        }
+                    }
+                }
+            }
+
+            is IntentResult.ReadNews -> {
+                if (newsReader == null) {
+                    ttsEngine.speak("News is not available.") {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                    return
+                }
+                ttsEngine.speak("Checking the news.") {
+                    serviceScope.launch {
+                        val (headlines, _) = newsReader!!.fetchHeadlines(intent.topic)
+                        if (headlines.isEmpty()) {
+                            ttsEngine.speak("I couldn't find any news right now.") {
+                                stateMachine.transition(AdamState.IDLE)
+                            }
+                            return@launch
+                        }
+                        pendingHeadlines = headlines
+                        val list = buildString {
+                            append("Here are today's headlines. ")
+                            headlines.forEach { h ->
+                                append("${h.number}. ${h.title}. ")
+                            }
+                            append("Which story would you like to hear more about?")
+                        }
+                        ttsEngine.speak(list) {
+                            listenForHeadlineSelection()
                         }
                     }
                 }
