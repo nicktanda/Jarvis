@@ -2,6 +2,7 @@ package com.adam.app.core
 
 import android.app.NotificationManager
 import android.app.Notification
+import android.content.ComponentName
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
@@ -170,10 +171,30 @@ class AdamService : Service(), StateMachine.StateListener {
                 audioPipeline.start()
                 wakeWordDetector.start()
                 Log.d(TAG, "On-device speech pipeline ready")
+                checkPermissionsAfterUpdate()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize speech pipeline", e)
                 ttsEngine.speak("Speech engine failed to load. Voice commands unavailable.")
             }
+        }
+    }
+
+    private fun checkPermissionsAfterUpdate() {
+        val missing = mutableListOf<String>()
+
+        // Check notification listener — often revoked on Samsung after app update
+        val flat = android.provider.Settings.Secure.getString(
+            contentResolver, "enabled_notification_listeners"
+        )
+        val notifComponent = ComponentName(this, "com.adam.app.notifications.NotificationCaptureService")
+        if (flat == null || !flat.contains(notifComponent.flattenToString())) {
+            missing.add("notification access")
+        }
+
+        if (missing.isNotEmpty()) {
+            val list = missing.joinToString(" and ")
+            Log.w(TAG, "Missing permissions after update: $list")
+            ttsEngine.speak("Adam needs $list re-enabled. Please open the Adam app to fix this.")
         }
     }
 
