@@ -77,6 +77,11 @@ class ActionExecutor(
             is IntentResult.Repeat -> {
                 ActionDescription("Repeating") { true }
             }
+            is IntentResult.StartConversation,
+            is IntentResult.ContinueConversation,
+            is IntentResult.ListConversations -> {
+                null // Handled directly by AdamService
+            }
             is IntentResult.Unknown -> {
                 null // Handled by caller via TTS
             }

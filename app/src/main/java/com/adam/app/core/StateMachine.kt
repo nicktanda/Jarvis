@@ -8,7 +8,8 @@ enum class AdamState {
     LISTENING,
     PROCESSING,
     CONFIRMING,
-    EXECUTING
+    EXECUTING,
+    CONVERSING
 }
 
 enum class ButtonEvent {
@@ -76,6 +77,11 @@ class StateMachine(private val listener: StateListener) {
 
             AdamState.EXECUTING -> {
                 // No button actions during execution
+            }
+
+            AdamState.CONVERSING -> when (event) {
+                ButtonEvent.VOLUME_DOWN -> transition(AdamState.IDLE) // end conversation
+                else -> {}
             }
         }
     }

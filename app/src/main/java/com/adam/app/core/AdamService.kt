@@ -31,9 +31,12 @@ import com.adam.app.speech.OnDeviceWakeWordDetector
 import com.adam.app.speech.SileroVadDetector
 import com.adam.app.speech.TTSEngine
 import com.adam.app.speech.WhisperEngine
+import com.adam.app.data.ConversationEntity
+import com.adam.app.ai.ConversationEngine
 import com.adam.app.ai.WebSearcher
 import com.adam.app.updater.UpdateChecker
 import kotlinx.coroutines.*
+import kotlin.coroutines.resume
 
 class AdamService : Service(), StateMachine.StateListener {
 
@@ -54,6 +57,7 @@ class AdamService : Service(), StateMachine.StateListener {
 
     private var claudeParser: ClaudeIntentParser? = null
     private var webSearcher: WebSearcher? = null
+    private var conversationEngine: ConversationEngine? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentNotification: NotificationData? = null
@@ -63,6 +67,8 @@ class AdamService : Service(), StateMachine.StateListener {
     private var pendingClarification: String? = null
     private var pendingNotifications: List<NotificationData> = emptyList()
     private var pendingReactionNotification: NotificationData? = null
+    private var pendingConversations: List<ConversationEntity> = emptyList()
+    private var conversationJob: Job? = null
     private var announceTimeoutJob: Job? = null
     private var wakeLockRenewalJob: Job? = null
     private var savedRingerMode: Int = -1
@@ -186,6 +192,7 @@ class AdamService : Service(), StateMachine.StateListener {
             if (claudeKey != null) {
                 claudeParser = ClaudeIntentParser(claudeKey)
                 webSearcher = WebSearcher(claudeKey)
+                conversationEngine = ConversationEngine(this, claudeKey)
             } else {
                 Log.w(TAG, "Claude API key not set")
             }
@@ -214,6 +221,7 @@ class AdamService : Service(), StateMachine.StateListener {
         Log.d(TAG, "AdamService destroyed")
 
         serviceScope.cancel()
+        conversationJob?.cancel()
         announceTimeoutJob?.cancel()
         wakeLockRenewalJob?.cancel()
         wakeWordDetector.destroy()
@@ -254,9 +262,13 @@ class AdamService : Service(), StateMachine.StateListener {
                 pendingSmsContact = null
                 pendingSmsFirstChunk = null
                 pendingClarification = null
+                conversationJob?.cancel()
                 announceTimeoutJob?.cancel()
                 audioFocusManager.abandonFocus()
                 restoreAudioState()
+                // Detach from active conversation when returning to IDLE
+                // (conversation data is preserved in the database for resuming later)
+                conversationEngine?.endConversation()
                 // Resume wake word detection (just re-registers as AudioPipeline listener)
                 wakeWordDetector.start()
             }
@@ -327,6 +339,10 @@ class AdamService : Service(), StateMachine.StateListener {
 
             AdamState.EXECUTING -> {
                 executeConfirmedAction()
+            }
+
+            AdamState.CONVERSING -> {
+                startConversationLoop()
             }
         }
     }
@@ -734,6 +750,152 @@ class AdamService : Service(), StateMachine.StateListener {
         }
     }
 
+    // --- Conversation Selection ---
+
+    private fun listenForConversationSelection() {
+        serviceScope.launch {
+            val result = sttClient.transcribe(
+                leadoutMs = 300L,
+                silenceEndMs = 1200L,
+                noSpeechTimeoutMs = 8000L
+            )
+            val speech = result.getOrNull()?.lowercase() ?: ""
+            Log.d(TAG, "Conversation selection: $speech")
+
+            val cancelPatterns = listOf("cancel", "stop", "never mind", "nevermind", "none")
+            if (cancelPatterns.any { speech.contains(it) }) {
+                pendingConversations = emptyList()
+                ttsEngine.speak("Okay.") {
+                    stateMachine.transition(AdamState.IDLE)
+                }
+                return@launch
+            }
+
+            // Match by number
+            val number = Regex("\\d+").find(speech)?.value?.toIntOrNull()
+            val numberWords = mapOf(
+                "first" to 1, "one" to 1,
+                "second" to 2, "two" to 2,
+                "third" to 3, "three" to 3,
+                "fourth" to 4, "four" to 4,
+                "fifth" to 5, "five" to 5,
+                "last" to pendingConversations.size
+            )
+            val spokenNumber = numberWords.entries.firstOrNull { speech.contains(it.key) }?.value
+            val index = ((number ?: spokenNumber) ?: 0) - 1
+
+            // Match by title keyword
+            val matchedByTitle = if (index < 0) {
+                pendingConversations.indexOfFirst { conv ->
+                    conv.title.lowercase().split(" ").any { word ->
+                        word.length > 3 && speech.contains(word)
+                    }
+                }
+            } else -1
+
+            val finalIndex = if (index in pendingConversations.indices) index
+                else if (matchedByTitle >= 0) matchedByTitle
+                else -1
+
+            if (finalIndex < 0) {
+                ttsEngine.speak("I didn't catch which one. Say a number or the topic.") {
+                    listenForConversationSelection()
+                }
+                return@launch
+            }
+
+            val selected = pendingConversations[finalIndex]
+            pendingConversations = emptyList()
+            conversationEngine!!.resumeConversation(selected.id)
+            val summary = conversationEngine!!.getConversationSummary(selected.id)
+            ttsEngine.speak("Continuing: ${summary ?: selected.title}. Go ahead.") {
+                stateMachine.transition(AdamState.CONVERSING)
+            }
+        }
+    }
+
+    // --- Conversation Mode ---
+
+    private fun startConversationLoop() {
+        conversationJob?.cancel()
+        conversationJob = serviceScope.launch {
+            Log.d(TAG, "Conversation loop started")
+
+            while (stateMachine.currentState == AdamState.CONVERSING) {
+                vibrate(50) // Short buzz: "I'm listening"
+                Log.d(TAG, "Conversation: listening for next turn")
+
+                val result = sttClient.transcribe(
+                    leadoutMs = 600L,
+                    silenceEndMs = 2000L,
+                    noSpeechTimeoutMs = 15000L
+                )
+                if (stateMachine.currentState != AdamState.CONVERSING) break
+
+                val speech = result.getOrNull()
+
+                if (speech.isNullOrBlank()) {
+                    Log.d(TAG, "Conversation: silence timeout, pausing")
+                    speakAndWait("Conversation paused. Say continue conversation to pick back up.")
+                    stateMachine.transition(AdamState.IDLE)
+                    break
+                }
+
+                Log.d(TAG, "Conversation input: $speech")
+                val lower = speech.lowercase()
+
+                // Check for end-conversation phrases
+                // ("and conversation" is a common Whisper mishearing of "end conversation")
+                val endPatterns = listOf(
+                    "end conversation", "and conversation", "in conversation",
+                    "stop talking", "that's all", "that's it",
+                    "goodbye", "bye", "i'm done", "we're done",
+                    "end chat", "stop conversation", "stop",
+                    "cancel", "quit"
+                )
+                if (endPatterns.any { lower.contains(it) }) {
+                    speakAndWait("Conversation saved. You can continue it anytime.")
+                    stateMachine.transition(AdamState.IDLE)
+                    break
+                }
+
+                // Check for pause phrases
+                val pausePatterns = listOf(
+                    "pause conversation", "pause", "hold on", "one moment",
+                    "hold that thought", "be right back", "brb",
+                    "nevermind", "never mind"
+                )
+                if (pausePatterns.any { lower.contains(it) }) {
+                    speakAndWait("Conversation paused. Say continue conversation to pick back up.")
+                    stateMachine.transition(AdamState.IDLE)
+                    break
+                }
+
+                // Send message to conversation engine
+                vibrate(50) // Short buzz: "Got it"
+                Log.d(TAG, "Conversation: sending to Claude")
+                val response = conversationEngine?.sendMessage(speech)
+                    ?: "Conversation is not available."
+
+                Log.d(TAG, "Conversation: got response, speaking")
+                speakAndWait(response)
+                Log.d(TAG, "Conversation: response spoken, looping")
+            }
+
+            Log.d(TAG, "Conversation loop ended")
+        }
+    }
+
+    private suspend fun speakAndWait(text: String) {
+        suspendCancellableCoroutine { continuation ->
+            ttsEngine.speak(text) {
+                if (continuation.isActive) {
+                    continuation.resume(Unit)
+                }
+            }
+        }
+    }
+
     // --- Voice Capture & Processing ---
 
     private fun startVoiceCapture() {
@@ -973,6 +1135,99 @@ class AdamService : Service(), StateMachine.StateListener {
                         val result = webSearcher?.search(intent.query)
                             ?: "Search is not available."
                         ttsEngine.speak(result) {
+                            stateMachine.transition(AdamState.IDLE)
+                        }
+                    }
+                }
+            }
+
+            is IntentResult.StartConversation -> {
+                if (conversationEngine == null) {
+                    ttsEngine.speak("Conversations are not available.") {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                    return
+                }
+                serviceScope.launch {
+                    conversationEngine!!.startConversation(intent.topic.ifBlank { null })
+                    val topicText = if (intent.topic.isNotBlank()) {
+                        "about ${intent.topic}"
+                    } else {
+                        ""
+                    }
+                    ttsEngine.speak("Starting a conversation $topicText. Go ahead.".trim()) {
+                        stateMachine.transition(AdamState.CONVERSING)
+                    }
+                }
+            }
+
+            is IntentResult.ContinueConversation -> {
+                if (conversationEngine == null) {
+                    ttsEngine.speak("Conversations are not available.") {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                    return
+                }
+                serviceScope.launch {
+                    if (intent.topic.isNotBlank()) {
+                        // Topic specified — find and resume it
+                        val found = conversationEngine!!.findConversation(intent.topic)
+                        if (found != null) {
+                            conversationEngine!!.resumeConversation(found.id)
+                            val summary = conversationEngine!!.getConversationSummary(found.id)
+                            ttsEngine.speak("Continuing: ${summary ?: found.title}. Go ahead.") {
+                                stateMachine.transition(AdamState.CONVERSING)
+                            }
+                        } else {
+                            ttsEngine.speak("I couldn't find a conversation about ${intent.topic}.") {
+                                stateMachine.transition(AdamState.IDLE)
+                            }
+                        }
+                    } else {
+                        // No topic — list recent and ask which one
+                        val conversations = conversationEngine!!.getRecentConversations()
+                        if (conversations.isEmpty()) {
+                            ttsEngine.speak("You don't have any saved conversations.") {
+                                stateMachine.transition(AdamState.IDLE)
+                            }
+                        } else {
+                            pendingConversations = conversations
+                            val list = buildString {
+                                append("Which conversation? ")
+                                conversations.forEachIndexed { index, conv ->
+                                    append("${index + 1}. ${conv.title}. ")
+                                }
+                            }
+                            ttsEngine.speak(list) {
+                                listenForConversationSelection()
+                            }
+                        }
+                    }
+                }
+            }
+
+            is IntentResult.ListConversations -> {
+                if (conversationEngine == null) {
+                    ttsEngine.speak("Conversations are not available.") {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                    return
+                }
+                serviceScope.launch {
+                    val conversations = conversationEngine!!.getRecentConversations()
+                    if (conversations.isEmpty()) {
+                        ttsEngine.speak("You don't have any saved conversations yet.") {
+                            stateMachine.transition(AdamState.IDLE)
+                        }
+                    } else {
+                        val list = buildString {
+                            append("Your recent conversations: ")
+                            conversations.forEachIndexed { index, conv ->
+                                append("${index + 1}. ${conv.title}. ")
+                            }
+                            append("Say continue conversation about a topic to resume one.")
+                        }
+                        ttsEngine.speak(list) {
                             stateMachine.transition(AdamState.IDLE)
                         }
                     }
