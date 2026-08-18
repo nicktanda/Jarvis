@@ -33,6 +33,7 @@ import com.adam.app.speech.TTSEngine
 import com.adam.app.speech.WhisperEngine
 import com.adam.app.data.ConversationEntity
 import com.adam.app.ai.ConversationEngine
+import com.adam.app.ai.TextProcessor
 import com.adam.app.ai.WebSearcher
 import com.adam.app.updater.UpdateChecker
 import kotlinx.coroutines.*
@@ -58,6 +59,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private var claudeParser: ClaudeIntentParser? = null
     private var webSearcher: WebSearcher? = null
     private var conversationEngine: ConversationEngine? = null
+    private var textProcessor: TextProcessor? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentNotification: NotificationData? = null
@@ -193,6 +195,7 @@ class AdamService : Service(), StateMachine.StateListener {
                 claudeParser = ClaudeIntentParser(claudeKey)
                 webSearcher = WebSearcher(claudeKey)
                 conversationEngine = ConversationEngine(this, claudeKey)
+                textProcessor = TextProcessor(claudeKey)
             } else {
                 Log.w(TAG, "Claude API key not set")
             }
@@ -939,14 +942,15 @@ class AdamService : Service(), StateMachine.StateListener {
                 val stripped = OnDeviceSTTClient.stripEndPhrase(transcription)
                 if (stripped != null) {
                     if (stripped.isNotBlank()) allParts.add(stripped)
-                    val fullMessage = allParts.joinToString(" ")
+                    var fullMessage = allParts.joinToString(" ")
                     vibrate(50)
                     if (fullMessage.isBlank()) {
                         ttsEngine.speak("I didn't catch a message.") {
                             stateMachine.transition(AdamState.IDLE)
                         }
                     } else {
-                        // Message complete — go straight to confirmation
+                        // Add punctuation before confirmation
+                        fullMessage = textProcessor?.addPunctuation(fullMessage) ?: fullMessage
                         val action = actionExecutor.prepare(
                             IntentResult.SendSms(smsContact, fullMessage),
                             conversationContext.getRecentNotifications()
@@ -967,13 +971,15 @@ class AdamService : Service(), StateMachine.StateListener {
                 val restOfMessage = dictationResult.getOrNull() ?: ""
                 if (restOfMessage.isNotBlank()) allParts.add(restOfMessage)
 
-                val fullMessage = allParts.joinToString(" ")
+                var fullMessage = allParts.joinToString(" ")
                 vibrate(50)
                 if (fullMessage.isBlank()) {
                     ttsEngine.speak("I didn't catch a message.") {
                         stateMachine.transition(AdamState.IDLE)
                     }
                 } else {
+                    // Add punctuation before confirmation
+                    fullMessage = textProcessor?.addPunctuation(fullMessage) ?: fullMessage
                     val action = actionExecutor.prepare(
                         IntentResult.SendSms(smsContact, fullMessage),
                         conversationContext.getRecentNotifications()
