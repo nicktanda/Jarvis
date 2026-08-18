@@ -3,6 +3,7 @@ package com.adam.app.core
 import android.app.NotificationManager
 import android.app.Notification
 import android.content.ComponentName
+import android.provider.CalendarContract
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
@@ -1364,6 +1365,15 @@ class AdamService : Service(), StateMachine.StateListener {
                 }
             }
 
+            is IntentResult.ReadTodayCalendar -> {
+                serviceScope.launch {
+                    val summary = readTodayCalendar()
+                    ttsEngine.speak(summary) {
+                        stateMachine.transition(AdamState.IDLE)
+                    }
+                }
+            }
+
             is IntentResult.Unknown -> {
                 pendingClarification = intent.clarification
                 ttsEngine.speak(intent.clarification) {
@@ -1460,6 +1470,71 @@ class AdamService : Service(), StateMachine.StateListener {
             savedAlarmVolume = -1
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restore audio state", e)
+        }
+    }
+
+    // --- Calendar ---
+
+    private fun readTodayCalendar(): String {
+        return try {
+            val now = java.time.LocalDate.now()
+            val startMillis = now.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val endMillis = now.plusDays(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+            val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
+                .appendPath(startMillis.toString())
+                .appendPath(endMillis.toString())
+                .build()
+
+            val projection = arrayOf(
+                CalendarContract.Instances.TITLE,
+                CalendarContract.Instances.BEGIN,
+                CalendarContract.Instances.ALL_DAY
+            )
+
+            val cursor = contentResolver.query(
+                uri, projection, null, null,
+                "${CalendarContract.Instances.BEGIN} ASC"
+            )
+
+            if (cursor == null || cursor.count == 0) {
+                cursor?.close()
+                return "Your calendar is clear today."
+            }
+
+            val events = mutableListOf<String>()
+            cursor.use {
+                while (it.moveToNext()) {
+                    val title = it.getString(0) ?: "Untitled"
+                    val beginMillis = it.getLong(1)
+                    val allDay = it.getInt(2) == 1
+
+                    if (allDay) {
+                        events.add(title)
+                    } else {
+                        val time = java.time.Instant.ofEpochMilli(beginMillis)
+                            .atZone(java.time.ZoneId.systemDefault())
+                            .toLocalTime()
+                        val hour = time.hour
+                        val minute = time.minute
+                        val amPm = if (hour < 12) "AM" else "PM"
+                        val displayHour = if (hour == 0) 12 else if (hour > 12) hour - 12 else hour
+                        val timeStr = if (minute == 0) "$displayHour $amPm"
+                            else "$displayHour:${"%02d".format(minute)} $amPm"
+                        events.add("$title at $timeStr")
+                    }
+                }
+            }
+
+            buildString {
+                append("You have ${events.size} event${if (events.size > 1) "s" else ""} today. ")
+                events.forEachIndexed { index, event ->
+                    append("${index + 1}. $event. ")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read calendar", e)
+            "I couldn't read your calendar. Make sure calendar permission is enabled."
         }
     }
 

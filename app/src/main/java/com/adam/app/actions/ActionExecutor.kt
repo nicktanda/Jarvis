@@ -1,9 +1,13 @@
 package com.adam.app.actions
 
+import android.app.NotificationManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.telephony.SmsManager
 import android.util.Log
 import com.adam.app.ai.IntentResult
@@ -11,6 +15,11 @@ import com.adam.app.notifications.NotificationCaptureService
 import com.adam.app.speech.OnDeviceSTTClient
 import com.adam.app.notifications.NotificationData
 import com.adam.app.notifications.NotificationQueue
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.TimeZone
 
 class ActionExecutor(
     private val context: Context,
@@ -77,10 +86,15 @@ class ActionExecutor(
             is IntentResult.Repeat -> {
                 ActionDescription("Repeating") { true }
             }
+            is IntentResult.CreateCalendarEvent -> prepareCalendarEvent(intent)
+            is IntentResult.SetAlarm -> prepareAlarm(intent)
+            is IntentResult.SetTimer -> prepareTimer(intent)
+            is IntentResult.SetDoNotDisturb -> prepareDoNotDisturb(intent)
             is IntentResult.StartConversation,
             is IntentResult.ContinueConversation,
             is IntentResult.ListConversations,
-            is IntentResult.ReadNews -> {
+            is IntentResult.ReadNews,
+            is IntentResult.ReadTodayCalendar -> {
                 null // Handled directly by AdamService
             }
             is IntentResult.Unknown -> {
@@ -244,6 +258,190 @@ class ActionExecutor(
                 true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to react to notification", e)
+                false
+            }
+        }
+    }
+
+    // --- Calendar ---
+
+    private fun prepareCalendarEvent(intent: IntentResult.CreateCalendarEvent): ActionDescription? {
+        val startMillis = parseDateTimeToMillis(intent.date, intent.time)
+            ?: return ActionDescription("I couldn't understand that date or time.") { false }
+        val durationMillis = parseDurationToMillis(intent.duration)
+        val endMillis = startMillis + durationMillis
+
+        val timeStr = formatTimeForSpeech(intent.time)
+        return ActionDescription(
+            "Adding calendar event: ${intent.title}, ${intent.date} at $timeStr. Confirm?"
+        ) {
+            try {
+                val calendarId = getDefaultCalendarId()
+                if (calendarId == null) {
+                    Log.e(TAG, "No calendar found on device")
+                    return@ActionDescription false
+                }
+
+                val values = ContentValues().apply {
+                    put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                    put(CalendarContract.Events.TITLE, intent.title)
+                    put(CalendarContract.Events.DTSTART, startMillis)
+                    put(CalendarContract.Events.DTEND, endMillis)
+                    put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+                }
+
+                context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                Log.d(TAG, "Calendar event created: ${intent.title}")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create calendar event", e)
+                false
+            }
+        }
+    }
+
+    private fun getDefaultCalendarId(): Long? {
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.IS_PRIMARY
+        )
+        val cursor = context.contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            projection,
+            "${CalendarContract.Calendars.VISIBLE} = 1",
+            null,
+            "${CalendarContract.Calendars.IS_PRIMARY} DESC"
+        ) ?: return null
+
+        cursor.use {
+            if (it.moveToFirst()) {
+                return it.getLong(0)
+            }
+        }
+        return null
+    }
+
+    private fun parseDateTimeToMillis(dateStr: String, timeStr: String): Long? {
+        return try {
+            val date = LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE)
+            val timeParts = timeStr.split(":")
+            val time = LocalTime.of(timeParts[0].toInt(), timeParts.getOrElse(1) { "0" }.toInt())
+            date.atTime(time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse date/time: $dateStr $timeStr", e)
+            null
+        }
+    }
+
+    private fun parseDurationToMillis(duration: String): Long {
+        val lower = duration.lowercase()
+        var totalMinutes = 0L
+        Regex("(\\d+)\\s*hour").find(lower)?.let { totalMinutes += it.groupValues[1].toLong() * 60 }
+        Regex("(\\d+)\\s*min").find(lower)?.let { totalMinutes += it.groupValues[1].toLong() }
+        if (totalMinutes == 0L) totalMinutes = 60 // default 1 hour
+        return totalMinutes * 60 * 1000
+    }
+
+    private fun formatTimeForSpeech(timeStr: String): String {
+        return try {
+            val parts = timeStr.split(":")
+            val hour = parts[0].toInt()
+            val minute = parts.getOrElse(1) { "0" }.toInt()
+            val amPm = if (hour < 12) "AM" else "PM"
+            val displayHour = if (hour == 0) 12 else if (hour > 12) hour - 12 else hour
+            if (minute == 0) "$displayHour $amPm" else "$displayHour:${"%02d".format(minute)} $amPm"
+        } catch (e: Exception) {
+            timeStr
+        }
+    }
+
+    // --- Alarm ---
+
+    private fun prepareAlarm(intent: IntentResult.SetAlarm): ActionDescription {
+        val amPm = if (intent.hour < 12) "AM" else "PM"
+        val displayHour = if (intent.hour == 0) 12 else if (intent.hour > 12) intent.hour - 12 else intent.hour
+        val timeStr = if (intent.minute == 0) "$displayHour $amPm"
+            else "$displayHour:${"%02d".format(intent.minute)} $amPm"
+        val labelStr = if (intent.label.isNotBlank()) ": ${intent.label}" else ""
+
+        return ActionDescription(
+            "Setting alarm for $timeStr$labelStr. Confirm?"
+        ) {
+            try {
+                val alarmIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                    putExtra(AlarmClock.EXTRA_HOUR, intent.hour)
+                    putExtra(AlarmClock.EXTRA_MINUTES, intent.minute)
+                    putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                    if (intent.label.isNotBlank()) {
+                        putExtra(AlarmClock.EXTRA_MESSAGE, intent.label)
+                    }
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(alarmIntent)
+                Log.d(TAG, "Alarm set for ${intent.hour}:${intent.minute}")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to set alarm", e)
+                false
+            }
+        }
+    }
+
+    // --- Timer ---
+
+    private fun prepareTimer(intent: IntentResult.SetTimer): ActionDescription {
+        val minutes = intent.seconds / 60
+        val secs = intent.seconds % 60
+        val durationStr = when {
+            minutes > 0 && secs > 0 -> "$minutes minute${if (minutes > 1) "s" else ""} and $secs second${if (secs > 1) "s" else ""}"
+            minutes > 0 -> "$minutes minute${if (minutes > 1) "s" else ""}"
+            else -> "$secs second${if (secs > 1) "s" else ""}"
+        }
+        val labelStr = if (intent.label.isNotBlank()) ": ${intent.label}" else ""
+
+        return ActionDescription(
+            "Setting a $durationStr timer$labelStr. Confirm?"
+        ) {
+            try {
+                val timerIntent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                    putExtra(AlarmClock.EXTRA_LENGTH, intent.seconds)
+                    putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                    if (intent.label.isNotBlank()) {
+                        putExtra(AlarmClock.EXTRA_MESSAGE, intent.label)
+                    }
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(timerIntent)
+                Log.d(TAG, "Timer set for ${intent.seconds}s")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to set timer", e)
+                false
+            }
+        }
+    }
+
+    // --- Do Not Disturb ---
+
+    private fun prepareDoNotDisturb(intent: IntentResult.SetDoNotDisturb): ActionDescription {
+        val action = if (intent.enabled) "on" else "off"
+        return ActionDescription(
+            "Turning Do Not Disturb $action. Confirm?"
+        ) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                if (!nm.isNotificationPolicyAccessGranted) {
+                    Log.e(TAG, "DND policy access not granted")
+                    return@ActionDescription false
+                }
+                nm.setInterruptionFilter(
+                    if (intent.enabled) NotificationManager.INTERRUPTION_FILTER_PRIORITY
+                    else NotificationManager.INTERRUPTION_FILTER_ALL
+                )
+                Log.d(TAG, "DND set to $action")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle DND", e)
                 false
             }
         }

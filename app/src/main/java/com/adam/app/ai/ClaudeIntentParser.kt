@@ -42,6 +42,11 @@ Possible actions:
 {"action": "continue_conversation", "topic": "topic to search for"}
 {"action": "list_conversations"}
 {"action": "read_news", "topic": "optional topic"}
+{"action": "create_calendar_event", "event_title": "Meeting with John", "event_date": "2026-08-19", "event_time": "15:00", "event_duration": "1 hour"}
+{"action": "read_today_calendar"}
+{"action": "set_alarm", "alarm_hour": 7, "alarm_minute": 30, "alarm_label": "Wake up"}
+{"action": "set_timer", "timer_seconds": 300, "timer_label": "Eggs"}
+{"action": "set_do_not_disturb", "dnd_enabled": true}
 {"action": "repeat"}
 {"action": "unknown", "clarification": "what you need to know"}
 
@@ -56,6 +61,11 @@ Rules:
 - Use "continue_conversation" when the user says "continue conversation", "continue our conversation", "resume conversation", "go back to our chat", "pick up where we left off", or similar. If they specify a topic (e.g. "continue conversation about angry birds"), include it. If they just say "continue conversation" with no topic, use an empty topic string.
 - Use "list_conversations" ONLY when the user explicitly asks to list or show their conversations, e.g. "list my conversations", "show my conversations", "what conversations do I have".
 - Use "read_news" when the user asks for news, headlines, or current events summary. E.g. "what's in the news", "read me the news", "any news about technology", "give me the headlines". If they specify a topic (e.g. "tech news", "sports news"), include it. Otherwise use empty topic.
+- Use "create_calendar_event" when the user wants to add a calendar event, meeting, or appointment. Convert the date to ISO format (YYYY-MM-DD) relative to today's date. Convert time to 24-hour format (HH:MM). Default duration to "1 hour" if not specified. Today's date is provided in the context.
+- Use "read_today_calendar" when the user asks what's on their calendar, schedule, or agenda today.
+- Use "set_alarm" when the user wants to set an alarm. Convert the time to 24-hour format: "7:30am" = alarm_hour 7, alarm_minute 30. "3pm" = alarm_hour 15, alarm_minute 0. Use alarm_label for any description, default empty.
+- Use "set_timer" when the user wants to set a timer or countdown. Convert duration to total seconds: "5 minutes" = 300, "1 hour 30 minutes" = 5400, "90 seconds" = 90. Use timer_label for any description.
+- Use "set_do_not_disturb" when the user wants to enable or disable Do Not Disturb, silent mode, or quiet mode. Set dnd_enabled true to turn on, false to turn off.
 - Return ONLY valid JSON. No markdown, no explanation."""
     }
 
@@ -65,8 +75,13 @@ Rules:
         contactNames: List<String>
     ): Result<IntentResult> = withContext(Dispatchers.IO) {
         try {
+            val today = java.time.LocalDate.now().toString()
+            val dayOfWeek = java.time.LocalDate.now().dayOfWeek.name.lowercase()
+                .replaceFirstChar { it.uppercase() }
             val userMessage = buildString {
                 appendLine("User command: \"$userCommand\"")
+                appendLine()
+                appendLine("Today's date: $today ($dayOfWeek)")
                 appendLine()
                 appendLine(context.buildContextString())
                 appendLine()
@@ -151,6 +166,25 @@ Rules:
             "continue_conversation" -> IntentResult.ContinueConversation(topic = parsed.topic)
             "list_conversations" -> IntentResult.ListConversations
             "read_news" -> IntentResult.ReadNews(topic = parsed.topic)
+            "create_calendar_event" -> IntentResult.CreateCalendarEvent(
+                title = parsed.event_title,
+                date = parsed.event_date,
+                time = parsed.event_time,
+                duration = parsed.event_duration
+            )
+            "read_today_calendar" -> IntentResult.ReadTodayCalendar
+            "set_alarm" -> IntentResult.SetAlarm(
+                hour = parsed.alarm_hour,
+                minute = parsed.alarm_minute,
+                label = parsed.alarm_label
+            )
+            "set_timer" -> IntentResult.SetTimer(
+                seconds = parsed.timer_seconds,
+                label = parsed.timer_label
+            )
+            "set_do_not_disturb" -> IntentResult.SetDoNotDisturb(
+                enabled = parsed.dnd_enabled
+            )
             "repeat" -> IntentResult.Repeat
             else -> IntentResult.Unknown(
                 clarification = parsed.clarification.ifEmpty { "I didn't understand that command." }

@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import android.widget.TextView
+import android.app.NotificationManager
 import com.adam.app.R
 import com.adam.app.core.AdamService
 
@@ -29,6 +30,8 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var btnPhone: MaterialButton
     private lateinit var btnSms: MaterialButton
     private lateinit var btnContacts: MaterialButton
+    private lateinit var btnCalendar: MaterialButton
+    private lateinit var btnDndAccess: MaterialButton
     private lateinit var btnBattery: MaterialButton
     private lateinit var etClaudeKey: TextInputEditText
     private lateinit var btnStart: MaterialButton
@@ -56,6 +59,10 @@ class SetupActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { updatePermissionStates() }
 
+    private val calendarPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { updatePermissionStates() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_setup)
@@ -78,6 +85,8 @@ class SetupActivity : AppCompatActivity() {
         btnPhone = findViewById(R.id.btnPhone)
         btnSms = findViewById(R.id.btnSms)
         btnContacts = findViewById(R.id.btnContacts)
+        btnCalendar = findViewById(R.id.btnCalendar)
+        btnDndAccess = findViewById(R.id.btnDndAccess)
         btnBattery = findViewById(R.id.btnBattery)
         etClaudeKey = findViewById(R.id.etClaudeKey)
         btnStart = findViewById(R.id.btnStart)
@@ -109,6 +118,17 @@ class SetupActivity : AppCompatActivity() {
 
         btnContacts.setOnClickListener {
             contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+        }
+
+        btnCalendar.setOnClickListener {
+            calendarPermissionLauncher.launch(arrayOf(
+                Manifest.permission.READ_CALENDAR,
+                Manifest.permission.WRITE_CALENDAR
+            ))
+        }
+
+        btnDndAccess.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
         }
 
         btnBattery.setOnClickListener {
@@ -154,6 +174,8 @@ class SetupActivity : AppCompatActivity() {
         updateButton(btnPhone, "Phone Calls", hasPermission(Manifest.permission.CALL_PHONE))
         updateButton(btnSms, "SMS", hasPermission(Manifest.permission.SEND_SMS))
         updateButton(btnContacts, "Contacts", hasPermission(Manifest.permission.READ_CONTACTS))
+        updateButton(btnCalendar, "Calendar", hasPermission(Manifest.permission.READ_CALENDAR) && hasPermission(Manifest.permission.WRITE_CALENDAR))
+        updateButton(btnDndAccess, "Do Not Disturb", isDndAccessGranted())
         updateButton(btnBattery, "Battery Optimization", isBatteryOptimizationDisabled())
     }
 
@@ -181,6 +203,11 @@ class SetupActivity : AppCompatActivity() {
     private fun isAccessibilityEnabled(): Boolean {
         val flat = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
         return flat?.contains(ComponentName(this, "com.adam.app.accessibility.VolumeButtonService").flattenToString()) == true
+    }
+
+    private fun isDndAccessGranted(): Boolean {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        return nm.isNotificationPolicyAccessGranted
     }
 
     private fun isBatteryOptimizationDisabled(): Boolean {
