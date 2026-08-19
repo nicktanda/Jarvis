@@ -4,7 +4,7 @@ A screen-off, voice-controlled Android assistant for people who cannot look at a
 
 ## Features
 
-- **Wake word activation** — say "Hey Adam" to activate, hands-free
+- **Configurable wake word** — choose your assistant's name (default "Adam"), with fuzzy matching for reliable detection
 - **Notification management** — announces incoming notifications, reads them aloud, reply or react with emoji by voice
 - **Text messages** — compose and send SMS by voice with automatic punctuation
 - **Phone calls** — dial contacts by name with fuzzy matching
@@ -71,12 +71,12 @@ All speech recognition runs locally on the device — no audio leaves the phone:
 1. **AudioPipeline** continuously captures 16kHz mono audio
 2. **Silero VAD** (ONNX Runtime) detects speech vs. silence in real-time
 3. **whisper.cpp** (C++ via JNI) transcribes detected speech on-device
-4. Wake word detector listens for "Adam" / "Hey Adam" during idle
+4. Wake word detector listens for the configured name using fuzzy matching (Levenshtein distance)
 
 ### State Machine
 
 ```
-IDLE ──── "Hey Adam" ───► LISTENING ───► PROCESSING ───► CONFIRMING ───► EXECUTING ───► IDLE
+IDLE ──── wake word ────► LISTENING ───► PROCESSING ───► CONFIRMING ───► EXECUTING ───► IDLE
   │                                          │
   │                                          ├───► CONVERSING (multi-turn loop) ───► IDLE
   │                                          │
@@ -122,14 +122,15 @@ adb install app/build/outputs/apk/debug/app-debug.apk
    - **Do Not Disturb** — for toggling DND mode, redirects to system settings
    - **Battery Optimization** — exempt from Doze so the service stays alive
    - **Accessibility Service** — optional, enables volume button controls
-3. Enter your [Anthropic API key](https://console.anthropic.com/)
-4. Tap **Start Adam**
+3. Set your preferred **assistant name** (wake word) — default is "Adam"
+4. Enter your [Anthropic API key](https://console.anthropic.com/)
+5. Tap **Start Adam**
 
 ## Usage
 
 ### Activating
 
-Say **"Hey Adam"** — you'll hear a short vibration and "Yes?" to indicate it's listening.
+Say **"Hey [Name]"** (e.g. "Hey Adam", "Hey Jarvis") — you'll hear a short vibration and "Yes?" to indicate it's listening. The name is configured in the setup screen.
 
 ### Voice Commands
 
@@ -149,11 +150,11 @@ Say **"Hey Adam"** — you'll hear a short vibration and "Yes?" to indicate it's
 
 ### Conversations
 
-Conversations are multi-turn — after Adam responds, it automatically listens for your follow-up. No need to say "Hey Adam" between turns.
+Conversations are multi-turn — after the assistant responds, it automatically listens for your follow-up. No need to say the wake word between turns.
 
 - **Pause** — say "hold on", "pause", or just go silent for 15 seconds
 - **End** — say "end conversation", "stop", "cancel", or "goodbye"
-- **Resume later** — say "Hey Adam, continue conversation"
+- **Resume later** — say "Hey [Name], continue conversation"
 - Conversations are saved to a local database and can be resumed anytime
 
 ### Notification Flow
@@ -235,7 +236,7 @@ app/src/main/
 │   │   ├── SileroVadDetector.kt        # Voice activity detection (ONNX)
 │   │   ├── WhisperEngine.kt            # JNI bridge to whisper.cpp
 │   │   ├── OnDeviceSTTClient.kt        # Speech-to-text orchestration
-│   │   ├── OnDeviceWakeWordDetector.kt # "Hey Adam" detection
+│   │   ├── OnDeviceWakeWordDetector.kt # Wake word detection (fuzzy)
 │   │   └── TTSEngine.kt               # Text-to-speech with queue
 │   ├── actions/
 │   │   ├── ActionExecutor.kt           # SMS, call, calendar, alarm, timer, DND
