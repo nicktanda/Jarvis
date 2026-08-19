@@ -17,6 +17,7 @@ import kotlinx.coroutines.*
 
 class WakeWordDetector(
     private val context: Context,
+    private val wakeWordName: String = "adam",
     private val onWakeWordDetected: () -> Unit
 ) {
 
@@ -24,8 +25,9 @@ class WakeWordDetector(
         private const val TAG = "WakeWordDetector"
         private const val RESTART_DELAY_MS = 500L
         private const val ERROR_BACKOFF_MS = 2000L
-        private val WAKE_WORDS = listOf("adam", "hey adam", "hey atom", "hey adem", "a dam")
     }
+
+    private val nameLower = wakeWordName.lowercase().trim()
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var recognizer: SpeechRecognizer? = null
@@ -91,7 +93,7 @@ class WakeWordDetector(
                 val speech = matches?.firstOrNull()?.lowercase() ?: ""
                 Log.d(TAG, "Heard: '$speech'")
 
-                if (WAKE_WORDS.any { speech.contains(it) }) {
+                if (OnDeviceWakeWordDetector.matchesWakeWord(speech, nameLower)) {
                     Log.d(TAG, "Wake word detected!")
                     isActive = false
                     destroyRecognizer()
@@ -145,7 +147,7 @@ class WakeWordDetector(
             override fun onPartialResults(partialResults: Bundle?) {
                 val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val speech = matches?.firstOrNull()?.lowercase() ?: ""
-                if (WAKE_WORDS.any { speech.contains(it) }) {
+                if (OnDeviceWakeWordDetector.matchesWakeWord(speech, nameLower)) {
                     Log.d(TAG, "Wake word detected in partial results!")
                     isActive = false
                     destroyRecognizer()

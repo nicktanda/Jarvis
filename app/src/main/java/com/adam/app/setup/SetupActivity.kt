@@ -33,6 +33,7 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var btnCalendar: MaterialButton
     private lateinit var btnDndAccess: MaterialButton
     private lateinit var btnBattery: MaterialButton
+    private lateinit var etAssistantName: TextInputEditText
     private lateinit var etClaudeKey: TextInputEditText
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
@@ -88,6 +89,7 @@ class SetupActivity : AppCompatActivity() {
         btnCalendar = findViewById(R.id.btnCalendar)
         btnDndAccess = findViewById(R.id.btnDndAccess)
         btnBattery = findViewById(R.id.btnBattery)
+        etAssistantName = findViewById(R.id.etAssistantName)
         etClaudeKey = findViewById(R.id.etClaudeKey)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
@@ -233,6 +235,11 @@ class SetupActivity : AppCompatActivity() {
                 if (!claudeKey.isNullOrBlank()) putString("claude_key", claudeKey)
                 apply()
             }
+
+            // Save assistant name to regular prefs (not sensitive)
+            val name = etAssistantName.text?.toString()?.trim()
+            getSharedPreferences("adam_prefs", MODE_PRIVATE)
+                .edit().putString("assistant_name", if (name.isNullOrBlank()) "Adam" else name).apply()
         } catch (e: Exception) {
             Toast.makeText(this, "Error saving keys: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -253,6 +260,11 @@ class SetupActivity : AppCompatActivity() {
             val claudeKey = prefs.getString("claude_key", null)
 
             if (!claudeKey.isNullOrBlank()) etClaudeKey.setText(claudeKey)
+
+            // Load assistant name
+            val name = getSharedPreferences("adam_prefs", MODE_PRIVATE)
+                .getString("assistant_name", "Adam")
+            etAssistantName.setText(name)
         } catch (e: Exception) {
             // First launch, no keys yet
         }

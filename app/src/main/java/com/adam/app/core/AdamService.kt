@@ -78,6 +78,7 @@ class AdamService : Service(), StateMachine.StateListener {
     private var conversationJob: Job? = null
     private var announceTimeoutJob: Job? = null
     private var wakeLockRenewalJob: Job? = null
+    private var assistantName: String = "Adam"
     private var savedRingerMode: Int = -1
     private var savedAlarmVolume: Int = -1
 
@@ -123,7 +124,9 @@ class AdamService : Service(), StateMachine.StateListener {
         vadDetector = SileroVadDetector(this)
         whisperEngine = WhisperEngine(this)
         sttClient = OnDeviceSTTClient(audioPipeline, vadDetector, whisperEngine)
-        wakeWordDetector = OnDeviceWakeWordDetector(audioPipeline, vadDetector, whisperEngine) {
+        assistantName = getSharedPreferences("adam_prefs", MODE_PRIVATE)
+            .getString("assistant_name", "Adam") ?: "Adam"
+        wakeWordDetector = OnDeviceWakeWordDetector(audioPipeline, vadDetector, whisperEngine, assistantName) {
             serviceScope.launch(Dispatchers.Main) {
                 if (stateMachine.currentState == AdamState.IDLE) {
                     vibrate(100)
@@ -509,7 +512,7 @@ class AdamService : Service(), StateMachine.StateListener {
             val result = sttClient.transcribe()
             val speech = result.getOrNull()?.lowercase() ?: return@launch
 
-            val stopPatterns = listOf("stop", "adam stop", "shut up", "quiet", "enough", "cancel", "nevermind", "never mind")
+            val stopPatterns = listOf("stop", "${assistantName.lowercase()} stop", "shut up", "quiet", "enough", "cancel", "nevermind", "never mind")
             if (stopPatterns.any { speech.contains(it) }) {
                 Log.d(TAG, "Interrupt detected: $speech")
                 ttsEngine.stop()
