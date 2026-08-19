@@ -33,18 +33,41 @@ class OnDeviceWakeWordDetector(
             if (lower.contains(nameLower)) return true
 
             val words = lower.split(Regex("\\s+"))
+            val nameWords = nameLower.split(Regex("\\s+"))
+            val nameJoined = nameWords.joinToString("") // name without spaces
             // Allow edit distance 1 for short names (<=4), 2 for longer ones
-            val maxDist = if (nameLower.length <= 4) 1 else 2
+            val maxDist = if (nameJoined.length <= 4) 1 else 2
 
-            // Check each individual word
+            // Check each individual transcription word against name (no spaces)
             for (word in words) {
-                if (levenshtein(word, nameLower) <= maxDist) return true
+                if (levenshtein(word, nameJoined) <= maxDist) return true
             }
 
-            // Check adjacent word pairs — handles splits like "a dam" for "adam", "jar vis" for "jarvis"
-            for (i in 0 until words.size - 1) {
-                val pair = words[i] + words[i + 1]
-                if (levenshtein(pair, nameLower) <= maxDist) return true
+            // Check groups of adjacent transcription words joined together.
+            // Sizes 2..nameWords.size+1 handles word splits like "jar vis" → "jarvis",
+            // and multi-word names where transcription also splits words further.
+            val maxGroupSize = minOf(nameWords.size + 1, words.size)
+            for (groupSize in 2..maxGroupSize) {
+                for (i in 0..words.size - groupSize) {
+                    val joined = words.subList(i, i + groupSize).joinToString("")
+                    if (levenshtein(joined, nameJoined) <= maxDist) return true
+                }
+            }
+
+            // Multi-word name: slide a window of name-word-count over transcription
+            // and check word-by-word fuzzy match
+            if (nameWords.size > 1 && words.size >= nameWords.size) {
+                for (i in 0..words.size - nameWords.size) {
+                    var allMatch = true
+                    for (j in nameWords.indices) {
+                        val wordMaxDist = if (nameWords[j].length <= 4) 1 else 2
+                        if (levenshtein(words[i + j], nameWords[j]) > wordMaxDist) {
+                            allMatch = false
+                            break
+                        }
+                    }
+                    if (allMatch) return true
+                }
             }
 
             return false
